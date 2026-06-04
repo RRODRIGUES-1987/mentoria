@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 
@@ -37,10 +37,6 @@
       <div class="sidebar-logo-top"><div class="sidebar-logo-icon">M</div>Mentoria</div>
     </div>
     <div id="sidebar-scroll">
-      <button class="navitem active" data-view="dashboard">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        <span>Painel</span>
-      </button>
       <button class="navitem" data-view="contacts">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>
         <span>Contatos</span>
@@ -75,11 +71,10 @@
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
     </div>
     <div class="dtopbar">
-      <div class="dtitle" id="dtitle">Painel</div>
+      <div class="dtitle" id="dtitle">Mentorias</div>
     </div>
     <div class="content" id="content">
-      <div id="view-dashboard"   class="view"></div>
-      <div id="view-contacts"    class="view hidden"></div>
+      <div id="view-contacts"    class="view"></div>
       <div id="view-programs"    class="view hidden"></div>
       <div id="view-evaluations" class="view hidden"></div>
       <div id="view-billings"    class="view hidden"></div>
@@ -92,7 +87,7 @@
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="config.js"></script>
-<script src="app.js"></script>
+<script src="config.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>
