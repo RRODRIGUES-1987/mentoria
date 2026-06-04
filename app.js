@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -104,6 +104,7 @@ async function onLogin(user) {
   else state.permissions = prof.permissions || {};
 
   A.screen.classList.add("hidden"); A.app.classList.remove("hidden");
+  setVersion();
   const display = prof?.full_name || user.email;
   $("#user-email").textContent = display;
   $("#sb-avatar").textContent = ini(display);
@@ -724,7 +725,9 @@ function editProfileForm(p) {
 }
 
 /* ---------- boot ---------- */
-$$(".ver-badge").forEach((e) => { e.textContent = "v" + APP_VERSION; e.title = "Versão " + APP_VERSION; });
+function setVersion() { try { $$(".ver-badge").forEach((e) => { e.textContent = "v" + APP_VERSION; e.title = "Versão " + APP_VERSION; }); } catch (_) {} }
+console.log("%cMentoria app.js v" + APP_VERSION, "font-weight:bold");
+setVersion();
 (async () => {
   const { data } = await supa.auth.getSession();
   if (data.session?.user) onLogin(data.session.user);
