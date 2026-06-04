@@ -97,7 +97,7 @@ async function onLogin(user) {
   $("#sb-avatar").textContent = ini(user.email);
   $("#tb-avatar").textContent = ini(user.email);
   await Promise.all([loadContacts(), loadPrograms()]);
-  showView("dashboard");
+  showView("programs");
 }
 function onLogout() {
   state.user = null; state.contacts = []; state.programs = [];
@@ -116,7 +116,7 @@ async function save(table, payload, id) {
 async function remove(table, id) { const { error } = await supa.from(table).delete().eq("id", id); if (error) { toast("Erro ao excluir."); throw error; } }
 
 /* ---------- navegação ---------- */
-const TITLES = { dashboard: "Painel", contacts: "Contatos", programs: "Mentorias", evaluations: "Avaliações", billings: "Faturamento" };
+const TITLES = { contacts: "Contatos", programs: "Mentorias", evaluations: "Avaliações", billings: "Faturamento" };
 $$(".navitem[data-view]").forEach((b) => b.onclick = () => showView(b.dataset.view));
 function showView(name) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
@@ -124,7 +124,7 @@ function showView(name) {
   $("#view-" + name).classList.remove("hidden");
   $("#dtitle").textContent = TITLES[name] || "Mentoria";
   $("#content").scrollTop = 0;
-  ({ dashboard: renderDashboard, contacts: renderContacts, programs: renderPrograms, evaluations: renderEvaluations, billings: renderBillings })[name]?.();
+  ({ contacts: renderContacts, programs: renderPrograms, evaluations: renderEvaluations, billings: renderBillings })[name]?.();
 }
 
 /* ---------- modal ---------- */
@@ -146,43 +146,6 @@ function openModal({ title, body, onSave, saveLabel = "Salvar", wide = false }) 
 const field = (label, inner) => `<div class="fg"><label class="fl">${esc(label)}</label>${inner}</div>`;
 const val = (id) => $("#" + id).value.trim();
 const numOrNull = (v) => v === "" ? null : Number(v);
-
-/* ===================================================================
-   DASHBOARD
-   =================================================================== */
-async function renderDashboard() {
-  const v = $("#view-dashboard");
-  const active = state.programs.filter((p) => p.status === "ativo").length;
-  const [{ data: meetings }, { data: billings }] = await Promise.all([
-    supa.from("meetings").select("*, programs(title, contacts(name))").gte("scheduled_at", new Date().toISOString()).eq("status", "agendado").order("scheduled_at").limit(6),
-    supa.from("billings").select("*, programs(title)"),
-  ]);
-  const received = (billings || []).filter((b) => b.status === "pago").reduce((s, b) => s + Number(b.amount), 0);
-  const pending = (billings || []).filter((b) => b.status === "pendente" || b.status === "atrasado").reduce((s, b) => s + Number(b.amount), 0);
-  const overdue = (billings || []).filter((b) => b.status !== "pago" && b.status !== "cancelado" && b.due_date && b.due_date < todayISO());
-
-  v.innerHTML = `
-    <div class="metrics">
-      <div class="metric"><div class="mlabel">Contatos</div><div class="mval">${state.contacts.length}</div></div>
-      <div class="metric"><div class="mlabel">Mentorias ativas</div><div class="mval">${active}</div></div>
-      <div class="metric"><div class="mlabel">A receber</div><div class="mval">${money(pending)}</div></div>
-      <div class="metric"><div class="mlabel">Recebido</div><div class="mval">${money(received)}</div></div>
-    </div>
-    <div class="dash-cols">
-      <div class="panel"><div class="sechdr"><span class="sectitle">Próximos encontros</span></div>
-        ${(meetings || []).length ? (meetings || []).map((m) => `<div class="list-line">
-          <div><div class="ll-title">${esc(m.topic || "Encontro")}</div>
-            <div class="ll-sub">${esc(m.programs?.title || "")}${m.programs?.contacts?.name ? " · " + esc(m.programs.contacts.name) : ""}</div></div>
-          <div class="ll-sub" style="text-align:right">${fmtDateTime(m.scheduled_at)}</div></div>`).join("") : emptyState("Nenhum encontro agendado.")}
-      </div>
-      <div class="panel"><div class="sechdr"><span class="sectitle">Faturas em atraso</span></div>
-        ${overdue.length ? overdue.map((b) => `<div class="list-line">
-          <div><div class="ll-title">${esc(b.description || b.programs?.title || "Fatura")}</div>
-            <div class="ll-sub">Venceu em ${fmtDate(b.due_date)}</div></div>
-          <div class="lval" style="color:var(--red-text)">${money(b.amount)}</div></div>`).join("") : emptyState("Nenhuma fatura em atraso.")}
-      </div>
-    </div>`;
-}
 
 /* ===================================================================
    CONTATOS
