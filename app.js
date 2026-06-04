@@ -9,6 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
+const APP_VERSION = "1.2.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -92,15 +93,40 @@ supa.auth.onAuthStateChange((_e, session) => { if (session?.user) onLogin(sessio
 
 async function onLogin(user) {
   state.user = user;
+  let prof = null;
+  try { const r = await supa.from("profiles").select("*, companies(name, logo_url)").eq("id", user.id).maybeSingle(); prof = r.data; } catch (_) {}
+  state.profile = prof;
+  state.isSuperAdmin = prof?.role === "super_admin";
+  state.companyId = prof?.company_id || null;
+  const ALL = { contacts: true, programs: true, evaluations: true, billings: true };
+  if (!prof) { state.permissions = ALL; toast("Perfil não configurado — rode a migração multi-empresa."); }
+  else if (state.isSuperAdmin || prof.role === "admin") state.permissions = ALL;
+  else state.permissions = prof.permissions || {};
+
   A.screen.classList.add("hidden"); A.app.classList.remove("hidden");
-  $("#user-email").textContent = user.email;
-  $("#sb-avatar").textContent = ini(user.email);
-  $("#tb-avatar").textContent = ini(user.email);
+  const display = prof?.full_name || user.email;
+  $("#user-email").textContent = display;
+  $("#sb-avatar").textContent = ini(display);
+  $("#tb-avatar").textContent = ini(display);
+  const roleEl = $(".sburole"); if (roleEl) roleEl.textContent = prof?.companies?.name || (state.isSuperAdmin ? "Super admin" : "Mentor");
+  applyPermissions();
   await Promise.all([loadContacts(), loadPrograms()]);
-  showView("programs");
+  showView(firstView());
+}
+function applyPermissions() {
+  $$(".navitem[data-view]").forEach((b) => {
+    const view = b.dataset.view;
+    const show = view === "admin" ? state.isSuperAdmin
+      : (state.isSuperAdmin || state.profile?.role === "admin" || state.permissions?.[view] === true);
+    b.classList.toggle("hidden", !show);
+  });
+}
+function firstView() {
+  return ["programs", "contacts", "evaluations", "billings", "admin"]
+    .find((v) => { const b = $(`.navitem[data-view="${v}"]`); return b && !b.classList.contains("hidden"); }) || "programs";
 }
 function onLogout() {
-  state.user = null; state.contacts = []; state.programs = [];
+  state.user = null; state.contacts = []; state.programs = []; state.profile = null; state.isSuperAdmin = false;
   A.app.classList.add("hidden"); A.screen.classList.remove("hidden");
   A.email.value = ""; A.pass.value = "";
 }
@@ -108,23 +134,26 @@ function onLogout() {
 /* ---------- dados ---------- */
 async function loadContacts() { const { data } = await supa.from("contacts").select("*, positions(company, role, is_current, start_date, end_date)").order("name"); state.contacts = data || []; }
 async function loadPrograms() { const { data } = await supa.from("programs").select("*, contacts(name)").order("created_at", { ascending: false }); state.programs = data || []; }
+const DATA_TABLES = ["contacts", "programs", "meetings", "evaluations", "billings", "positions"];
 async function save(table, payload, id) {
   payload.user_id = state.user.id;
+  if (!id && DATA_TABLES.includes(table) && state.companyId) payload.company_id = state.companyId;
   const { error } = id ? await supa.from(table).update(payload).eq("id", id) : await supa.from(table).insert(payload);
   if (error) { toast("Erro: " + error.message); throw error; }
 }
 async function remove(table, id) { const { error } = await supa.from(table).delete().eq("id", id); if (error) { toast("Erro ao excluir."); throw error; } }
 
 /* ---------- navegação ---------- */
-const TITLES = { contacts: "Contatos", programs: "Mentorias", evaluations: "Avaliações", billings: "Faturamento" };
+const TITLES = { contacts: "Contatos", programs: "Mentorias", evaluations: "Avaliações", billings: "Faturamento", admin: "Admin" };
 $$(".navitem[data-view]").forEach((b) => b.onclick = () => showView(b.dataset.view));
 function showView(name) {
+  if (name === "admin" && !state.isSuperAdmin) return;
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $$(".navitem[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   $("#view-" + name).classList.remove("hidden");
   $("#dtitle").textContent = TITLES[name] || "Mentoria";
   $("#content").scrollTop = 0;
-  ({ contacts: renderContacts, programs: renderPrograms, evaluations: renderEvaluations, billings: renderBillings })[name]?.();
+  ({ contacts: renderContacts, programs: renderPrograms, evaluations: renderEvaluations, billings: renderBillings, admin: renderAdmin })[name]?.();
 }
 
 /* ---------- modal ---------- */
@@ -567,7 +596,135 @@ function billingForm(b = {}, refresh) {
   });
 }
 
+/* ===================================================================
+   ADMIN (só super admin) — Empresas e Usuários
+   =================================================================== */
+const MODULES = [["contacts", "Contatos"], ["programs", "Mentorias"], ["evaluations", "Avaliações"], ["billings", "Faturamento"]];
+function renderAdmin() {
+  const v = $("#view-admin");
+  v.innerHTML = `<div class="sechdr"><div><div class="eyebrow">Administração</div><span class="sectitle">Admin</span></div></div>
+    <div class="tabs"><button class="tab active" data-atab="empresas">Empresas</button>
+      <button class="tab" data-atab="usuarios">Usuários</button></div>
+    <div id="admin-content"></div>`;
+  $$(".tab", v).forEach((b) => b.onclick = () => { $$(".tab", v).forEach((x) => x.classList.toggle("active", x === b)); (b.dataset.atab === "empresas" ? renderAdminCompanies : renderAdminUsers)(); });
+  renderAdminCompanies();
+}
+async function loadCompanies() { const { data } = await supa.from("companies").select("*").order("name"); state.companies = data || []; return state.companies; }
+
+async function renderAdminCompanies() {
+  const c = $("#admin-content");
+  const [companies, { data: profiles }] = await Promise.all([loadCompanies(), supa.from("profiles").select("company_id")]);
+  const counts = {}; (profiles || []).forEach((p) => { if (p.company_id) counts[p.company_id] = (counts[p.company_id] || 0) + 1; });
+  c.innerHTML = sechdr(null, "Empresas", "add-company", "+ Nova empresa") +
+    (companies.length ? companies.map((co) => `
+      <div class="li">
+        ${co.logo_url ? `<img src="${esc(co.logo_url)}" alt="" style="width:34px;height:34px;border-radius:8px;object-fit:cover">` : `<div class="av ${avClass(co.name)}">${esc(ini(co.name))}</div>`}
+        <div class="linfo"><div class="lname">${esc(co.name)}</div>
+          <div class="lsub">${counts[co.id] || 0} / ${co.max_users} usuários</div></div>
+        <div class="lright"><button class="bicon" data-cedit="${co.id}">${ICON.edit}</button></div>
+      </div>`).join("") : emptyState("Nenhuma empresa cadastrada."));
+  $("#add-company").onclick = () => companyForm();
+  $$("[data-cedit]", c).forEach((b) => b.onclick = () => companyForm(companies.find((x) => x.id === b.dataset.cedit)));
+}
+function companyForm(co = {}) {
+  openModal({
+    title: co.id ? "Editar empresa" : "Nova empresa",
+    body: `${field("Nome da empresa", `<input id="f-cname" value="${esc(co.name || "")}">`)}
+      ${field("Limite de usuários", `<input id="f-cmax" type="number" min="1" value="${esc(co.max_users ?? 5)}">`)}
+      ${field("Logomarca", `<input id="f-logo" type="file" accept="image/*">`)}
+      ${co.logo_url ? `<img src="${esc(co.logo_url)}" alt="" style="max-height:60px;border-radius:8px;margin-top:4px">` : ""}`,
+    onSave: async () => {
+      const name = val("f-cname"); if (!name) { toast("Informe o nome."); throw 0; }
+      const max = numOrNull(val("f-cmax")) || 5;
+      let id = co.id;
+      if (id) { const { error } = await supa.from("companies").update({ name, max_users: max }).eq("id", id); if (error) { toast(error.message); throw 0; } }
+      else { const { data, error } = await supa.from("companies").insert({ name, max_users: max, created_by: state.user.id }).select().single(); if (error) { toast(error.message); throw 0; } id = data.id; }
+      const f = $("#f-logo").files[0];
+      if (f) {
+        const path = `${id}/logo_${Date.now()}`;
+        const { error: upErr } = await supa.storage.from("logos").upload(path, f, { upsert: true });
+        if (upErr) toast("Logo não enviada: " + upErr.message);
+        else { const { data: pub } = supa.storage.from("logos").getPublicUrl(path); await supa.from("companies").update({ logo_url: pub.publicUrl }).eq("id", id); }
+      }
+      toast("Empresa salva."); renderAdminCompanies();
+    },
+  });
+}
+
+async function renderAdminUsers() {
+  const c = $("#admin-content");
+  await loadCompanies();
+  const [{ data: profiles }, { data: invites }] = await Promise.all([
+    supa.from("profiles").select("*, companies(name)").order("created_at"),
+    supa.from("invites").select("*, companies(name)").eq("accepted", false).order("created_at"),
+  ]);
+  const permSummary = (p) => p.role === "super_admin" ? "Acesso total" : p.role === "admin" ? "Admin da empresa" : MODULES.filter((m) => (p.permissions || {})[m[0]]).map((m) => m[1]).join(", ") || "Sem telas liberadas";
+  c.innerHTML = sechdr(null, "Usuários", "add-user", "+ Novo usuário") +
+    ((profiles || []).map((p) => `
+      <div class="li" style="align-items:flex-start">
+        <div class="av ${avClass(p.full_name || p.email)}">${esc(ini(p.full_name || p.email))}</div>
+        <div class="linfo"><div class="lname">${esc(p.full_name || p.email)} ${p.role === "super_admin" ? '<span class="bdg bb">super admin</span>' : ""}</div>
+          <div class="lsub">${esc(p.email)}${p.companies?.name ? " · " + esc(p.companies.name) : ""}</div>
+          <div class="lsub">${esc(permSummary(p))}</div></div>
+        <div class="lright">${p.role === "super_admin" ? "" : `<button class="bicon" data-uedit="${p.id}">${ICON.edit}</button>`}</div>
+      </div>`).join("") +
+    ((invites || []).length ? `<div class="sechdr" style="margin-top:16px"><span class="sectitle">Convites pendentes</span></div>` +
+      invites.map((iv) => `<div class="li" style="align-items:flex-start">
+        <div class="av ${avClass(iv.email)}">${esc(ini(iv.full_name || iv.email))}</div>
+        <div class="linfo"><div class="lname">${esc(iv.full_name || iv.email)} <span class="bdg ba">aguardando 1º acesso</span></div>
+          <div class="lsub">${esc(iv.email)}${iv.companies?.name ? " · " + esc(iv.companies.name) : ""}</div></div>
+        <div class="lright"><button class="bicon danger" data-idel="${iv.id}">${ICON.trash}</button></div>
+      </div>`).join("") : "") ||
+    emptyState("Nenhum usuário ainda."));
+  $("#add-user").onclick = () => userForm();
+  $$("[data-uedit]", c).forEach((b) => b.onclick = () => editProfileForm((profiles || []).find((p) => p.id === b.dataset.uedit)));
+  $$("[data-idel]", c).forEach((b) => b.onclick = async () => { if (confirm("Cancelar este convite?")) { await supa.from("invites").delete().eq("id", b.dataset.idel); toast("Convite cancelado."); renderAdminUsers(); } });
+}
+const companyOpts = (sel) => state.companies.map((co) => `<option value="${co.id}" ${co.id === sel ? "selected" : ""}>${esc(co.name)}</option>`).join("");
+const permChecks = (perms = {}) => MODULES.map((m) => `<label class="ckline"><input type="checkbox" class="perm" data-perm="${m[0]}" ${perms[m[0]] ? "checked" : ""}> ${esc(m[1])}</label>`).join("");
+function collectPerms() { const o = {}; $$(".perm").forEach((cb) => o[cb.dataset.perm] = cb.checked); return o; }
+
+function userForm() {
+  openModal({
+    title: "Novo usuário", wide: true,
+    body: `<p class="muted" style="font-size:12px;margin-bottom:12px">O usuário define a própria senha no primeiro acesso, usando este e-mail.</p>
+      <div class="grid-2">${field("Nome", `<input id="f-uname" value="">`)}
+        ${field("E-mail", `<input id="f-uemail" type="email" value="">`)}</div>
+      <div class="grid-2">${field("Empresa", `<select id="f-ucompany">${companyOpts(state.companyId)}</select>`)}
+        ${field("Papel", `<select id="f-urole"><option value="user">Usuário</option><option value="admin">Admin da empresa</option></select>`)}</div>
+      ${field("Telas liberadas", `<div>${permChecks({})}</div>`)}`,
+    onSave: async () => {
+      const email = val("f-uemail"); if (!email) { toast("Informe o e-mail."); throw 0; }
+      const { error } = await supa.from("invites").upsert({
+        email: email.toLowerCase(), full_name: val("f-uname"), company_id: val("f-ucompany") || null,
+        role: val("f-urole"), permissions: collectPerms(), created_by: state.user.id, accepted: false,
+      }, { onConflict: "email" });
+      if (error) { toast(error.message); throw 0; }
+      toast("Usuário cadastrado. Ele define a senha no 1º acesso."); renderAdminUsers();
+    },
+  });
+}
+function editProfileForm(p) {
+  openModal({
+    title: "Editar usuário", wide: true,
+    body: `${field("Nome", `<input id="f-uname" value="${esc(p.full_name || "")}">`)}
+      <div class="grid-2">${field("Empresa", `<select id="f-ucompany">${companyOpts(p.company_id)}</select>`)}
+        ${field("Papel", `<select id="f-urole"><option value="user" ${p.role === "user" ? "selected" : ""}>Usuário</option><option value="admin" ${p.role === "admin" ? "selected" : ""}>Admin da empresa</option></select>`)}</div>
+      ${field("Telas liberadas", `<div>${permChecks(p.permissions || {})}</div>`)}
+      <label class="ckline"><input type="checkbox" id="f-active" ${p.is_active ? "checked" : ""}> Usuário ativo</label>`,
+    onSave: async () => {
+      const { error } = await supa.from("profiles").update({
+        full_name: val("f-uname"), company_id: val("f-ucompany") || null,
+        role: val("f-urole"), permissions: collectPerms(), is_active: $("#f-active").checked,
+      }).eq("id", p.id);
+      if (error) { toast(error.message); throw 0; }
+      toast("Usuário atualizado."); renderAdminUsers();
+    },
+  });
+}
+
 /* ---------- boot ---------- */
+$$(".ver-badge").forEach((e) => { e.textContent = "v" + APP_VERSION; e.title = "Versão " + APP_VERSION; });
 (async () => {
   const { data } = await supa.auth.getSession();
   if (data.session?.user) onLogin(data.session.user);
