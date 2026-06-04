@@ -106,7 +106,7 @@ function onLogout() {
 }
 
 /* ---------- dados ---------- */
-async function loadContacts() { const { data } = await supa.from("contacts").select("*").order("name"); state.contacts = data || []; }
+async function loadContacts() { const { data } = await supa.from("contacts").select("*, positions(company, role, is_current, start_date, end_date)").order("name"); state.contacts = data || []; }
 async function loadPrograms() { const { data } = await supa.from("programs").select("*, contacts(name)").order("created_at", { ascending: false }); state.programs = data || []; }
 async function save(table, payload, id) {
   payload.user_id = state.user.id;
@@ -150,38 +150,181 @@ const numOrNull = (v) => v === "" ? null : Number(v);
 /* ===================================================================
    CONTATOS
    =================================================================== */
+function currentPosition(c) {
+  const ps = c.positions || []; if (!ps.length) return null;
+  return ps.find((p) => p.is_current) || [...ps].sort((a, b) => (b.start_date || "") > (a.start_date || "") ? 1 : -1)[0];
+}
+function contactSubtitle(c) {
+  const cur = currentPosition(c);
+  if (cur) return [cur.role, cur.company].filter(Boolean).join(" · ") || c.email || "—";
+  return [c.role, c.company].filter(Boolean).join(" · ") || c.email || "—";
+}
+
 async function renderContacts() {
   const v = $("#view-contacts");
   await loadContacts();
   v.innerHTML = sechdr("Pessoas", "Contatos", "add-contact", "+ Novo contato") +
     (state.contacts.length ? state.contacts.map((c) => `
-      <div class="li clickable" data-edit="${c.id}">
+      <div class="li clickable" data-open="${c.id}">
         <div class="av ${avClass(c.name)}">${esc(ini(c.name))}</div>
-        <div class="linfo"><div class="lname">${esc(c.name)}</div>
-          <div class="lsub">${esc([c.role, c.company].filter(Boolean).join(" · ") || c.email || "—")}</div></div>
-        <div class="lright"><button class="bicon danger" data-del="${c.id}" title="Excluir">${ICON.trash}</button></div>
+        <div class="linfo"><div class="lname">${esc(c.name)}${c.age ? ` · ${c.age}` : ""}</div>
+          <div class="lsub">${esc(contactSubtitle(c))}</div></div>
+        <div class="lright">${c.is_mentee ? '<span class="bdg bb">Mentorado</span>' : ""}
+          <button class="bicon danger" data-del="${c.id}" title="Excluir">${ICON.trash}</button></div>
       </div>`).join("") : emptyState("Nenhum contato ainda. Crie o primeiro."));
 
   $("#add-contact").onclick = () => contactForm();
-  $$("[data-edit]", v).forEach((el) => el.onclick = (e) => { if (e.target.closest("[data-del]")) return; contactForm(state.contacts.find((c) => c.id === el.dataset.edit)); });
-  $$("[data-del]", v).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); if (confirm("Excluir este contato?")) { await remove("contacts", b.dataset.del); toast("Contato excluído."); renderContacts(); } });
+  $$("[data-open]", v).forEach((el) => el.onclick = (e) => { if (e.target.closest("[data-del]")) return; openContactDetail(el.dataset.open); });
+  $$("[data-del]", v).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); if (confirm("Excluir este contato? O histórico profissional dele também será removido.")) { await remove("contacts", b.dataset.del); toast("Contato excluído."); renderContacts(); } });
 }
-function contactForm(c = {}) {
+
+/* ---------- detalhe do contato ---------- */
+function familyHtml(c) {
+  const spouse = c.is_married
+    ? `<div><div class="lbl">Cônjuge</div><div class="v">${esc(c.spouse_name || "—")}${c.spouse_age ? ` · ${c.spouse_age} anos` : ""}</div></div>
+       <div><div class="lbl">Cônjuge trabalha</div><div class="v">${c.spouse_works ? `Sim — ${esc(c.spouse_workplace || "—")}${c.spouse_role ? " (" + esc(c.spouse_role) + ")" : ""}` : "Não"}</div></div>`
+    : `<div><div class="lbl">Estado civil</div><div class="v">Solteiro(a)</div></div>`;
+  const kids = c.children || [];
+  const kidsHtml = kids.map((k) => `<div class="li"><div class="av av3">${esc(ini(k.name))}</div>
+    <div class="linfo"><div class="lname">${esc(k.name || "—")}${k.age != null && k.age !== "" ? ` · ${esc(k.age)} anos` : ""}</div>
+      <div class="lsub">${k.works ? `Trabalha — ${esc(k.workplace || "—")}${k.role ? " (" + esc(k.role) + ")" : ""}` : "Não trabalha"}</div></div></div>`).join("");
+  return `<div class="infocard"><div class="infogrid">${spouse}</div></div>
+    ${kids.length ? `<div class="sechdr" style="margin-top:6px"><span class="sectitle">Filhos (${kids.length})</span></div>${kidsHtml}` : ""}`;
+}
+async function openContactDetail(id) {
+  await loadContacts();
+  const c = state.contacts.find((x) => x.id === id); if (!c) return;
+  state.currentContact = c;
+  $$(".view").forEach((vv) => vv.classList.add("hidden"));
+  $$(".navitem[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === "contacts"));
+  $("#dtitle").textContent = c.name;
+  await loadPrograms();
+  const progs = state.programs.filter((p) => p.contact_id === id);
+  const v = $("#view-contact-detail"); v.classList.remove("hidden");
+  v.innerHTML = `
+    <button class="back-link" id="cd-back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>Contatos</button>
+    <div class="sechdr"><div><div class="eyebrow">Contato${c.is_mentee ? " · Mentorado" : ""}</div>
+      <span class="sectitle">${esc(c.name)}${c.age ? ` · ${c.age} anos` : ""}</span></div>
+      <div class="row" style="gap:6px">
+        <button class="btn btn-sm" id="cd-edit">Editar</button>
+        <button class="btn btn-sm ${c.is_mentee ? "" : "btn-p"}" id="cd-mentee">${c.is_mentee ? "Remover de mentorados" : "Tornar mentorado"}</button>
+      </div></div>
+    <div class="infocard"><div class="infogrid">
+      <div><div class="lbl">E-mail</div><div class="v">${esc(c.email || "—")}</div></div>
+      <div><div class="lbl">Telefone</div><div class="v">${esc(c.phone || "—")}</div></div>
+      ${c.tags ? `<div><div class="lbl">Tags</div><div class="v">${esc(c.tags)}</div></div>` : ""}
+    </div>${c.notes ? `<div class="divider"></div><div class="muted">${esc(c.notes)}</div>` : ""}</div>
+    ${familyHtml(c)}
+    <div class="sechdr" style="margin-top:18px"><span class="sectitle">Histórico profissional</span>
+      <button class="btn btn-p btn-sm" id="add-pos">+ Cargo</button></div>
+    <div id="positions-list"></div>
+    ${c.is_mentee ? `<div class="sechdr" style="margin-top:18px"><span class="sectitle">Mentorias</span></div>
+      ${progs.length ? progs.map((p) => `<div class="li clickable" data-prog="${p.id}">
+        <div class="linfo"><div class="lname">${esc(p.title)}</div><div class="lsub">${esc(p.objective || "")}</div></div>
+        <div class="lright">${badge(p.status)}</div></div>`).join("") : emptyState("Nenhuma mentoria ainda. Crie em Mentorias.")}` : ""}`;
+  $("#cd-back").onclick = () => showView("contacts");
+  $("#cd-edit").onclick = () => contactForm(c, () => openContactDetail(id));
+  $("#cd-mentee").onclick = async () => { await save("contacts", { is_mentee: !c.is_mentee }, id); toast(c.is_mentee ? "Removido de mentorados." : "Agora é mentorado."); openContactDetail(id); };
+  $$("[data-prog]", v).forEach((el) => el.onclick = () => openProgramDetail(el.dataset.prog));
+  $("#add-pos").onclick = () => positionForm({ contact_id: id });
+  renderContactPositions(id);
+}
+async function renderContactPositions(id) {
+  const wrap = $("#positions-list"); if (!wrap) return;
+  const { data } = await supa.from("positions").select("*").eq("contact_id", id).order("start_date", { ascending: false, nullsFirst: false });
+  wrap.innerHTML = (data || []).length ? data.map((p) => `
+    <div class="li" style="align-items:flex-start">
+      <div class="linfo"><div class="lname">${esc(p.role || "Cargo")}${p.company ? ` · ${esc(p.company)}` : ""} ${p.is_current ? '<span class="bdg bg">atual</span>' : ""}</div>
+        <div class="lsub">${fmtDate(p.start_date)} → ${p.is_current ? "atual" : fmtDate(p.end_date)}</div>
+        ${p.remuneration != null ? `<div class="lsub">Remuneração: ${money(p.remuneration)}</div>` : ""}
+        ${p.benefits ? `<div class="lsub" style="overflow:visible;white-space:pre-wrap">Benefícios: ${esc(p.benefits)}</div>` : ""}
+        ${p.notes ? `<div class="lsub" style="overflow:visible;white-space:pre-wrap;margin-top:2px">${esc(p.notes)}</div>` : ""}</div>
+      <div class="lright"><button class="bicon" data-pedit="${p.id}">${ICON.edit}</button>
+        <button class="bicon danger" data-pdel="${p.id}">${ICON.trash}</button></div>
+    </div>`).join("") : emptyState("Nenhum cargo registrado. Adicione o histórico profissional.");
+  $$("[data-pedit]", wrap).forEach((b) => b.onclick = () => positionForm((data || []).find((p) => p.id === b.dataset.pedit)));
+  $$("[data-pdel]", wrap).forEach((b) => b.onclick = async () => { if (confirm("Excluir este cargo?")) { await remove("positions", b.dataset.pdel); toast("Cargo excluído."); renderContactPositions(id); } });
+}
+function positionForm(p = {}) {
+  const cid = p.contact_id || state.currentContact?.id;
   openModal({
-    title: c.id ? "Editar contato" : "Novo contato",
-    body: `${field("Nome", `<input id="f-name" value="${esc(c.name || "")}">`)}
-      <div class="grid-2">${field("E-mail", `<input id="f-email" type="email" value="${esc(c.email || "")}">`)}
-        ${field("Telefone", `<input id="f-phone" value="${esc(c.phone || "")}">`)}</div>
-      <div class="grid-2">${field("Empresa", `<input id="f-company" value="${esc(c.company || "")}">`)}
-        ${field("Cargo/Papel", `<input id="f-role" value="${esc(c.role || "")}">`)}</div>
-      ${field("Tags", `<input id="f-tags" value="${esc(c.tags || "")}" placeholder="executivo, primeira mentoria">`)}
-      ${field("Notas", `<textarea id="f-notes">${esc(c.notes || "")}</textarea>`)}`,
+    title: p.id ? "Editar cargo" : "Novo cargo", wide: true,
+    body: `<div class="grid-2">${field("Empresa", `<input id="f-company" value="${esc(p.company || "")}">`)}
+        ${field("Função/Cargo", `<input id="f-role" value="${esc(p.role || "")}">`)}</div>
+      <div class="grid-3">${field("Início", `<input id="f-start" type="date" value="${esc(p.start_date || "")}">`)}
+        ${field("Término", `<input id="f-end" type="date" value="${esc(p.end_date || "")}">`)}
+        ${field("Remuneração (R$)", `<input id="f-rem" type="number" step="0.01" value="${esc(p.remuneration ?? "")}">`)}</div>
+      <label class="ckline"><input type="checkbox" id="f-current" ${p.is_current ? "checked" : ""}> Cargo atual (sem data de término)</label>
+      ${field("Pacote de benefícios", `<textarea id="f-benefits" style="min-height:70px" placeholder="Plano de saúde, PLR, bônus, stock options…">${esc(p.benefits || "")}</textarea>`)}
+      ${field("Observações", `<textarea id="f-notes">${esc(p.notes || "")}</textarea>`)}`,
     onSave: async () => {
-      const name = val("f-name"); if (!name) { toast("Informe o nome."); throw 0; }
-      await save("contacts", { name, email: val("f-email"), phone: val("f-phone"), company: val("f-company"), role: val("f-role"), tags: val("f-tags"), notes: val("f-notes") }, c.id);
-      toast("Contato salvo."); await loadContacts(); renderContacts();
+      const isCurrent = $("#f-current").checked;
+      await save("positions", { contact_id: cid, company: val("f-company"), role: val("f-role"), start_date: val("f-start") || null, end_date: isCurrent ? null : (val("f-end") || null), is_current: isCurrent, remuneration: numOrNull(val("f-rem")), benefits: val("f-benefits"), notes: val("f-notes") }, p.id);
+      toast("Cargo salvo."); renderContactPositions(cid);
     },
   });
+}
+
+/* ---------- formulário do contato ---------- */
+function contactForm(c = {}, after) {
+  const done = after || (async () => { await loadContacts(); renderContacts(); });
+  const kids = (c.children && c.children.length) ? c.children : [];
+  const childBlock = (ch = {}) => `<div class="child-row">
+    <div class="grid-2"><div class="fg"><label class="fl">Nome</label><input class="ch-name" value="${esc(ch.name || "")}"></div>
+      <div class="fg"><label class="fl">Idade</label><input class="ch-age" type="number" value="${esc(ch.age ?? "")}"></div></div>
+    <label class="ckline"><input type="checkbox" class="ch-works" ${ch.works ? "checked" : ""}> Trabalha</label>
+    <div class="ch-workbox grid-2" style="${ch.works ? "" : "display:none"}">
+      <div class="fg"><label class="fl">Onde</label><input class="ch-workplace" value="${esc(ch.workplace || "")}"></div>
+      <div class="fg"><label class="fl">Função</label><input class="ch-role" value="${esc(ch.role || "")}"></div></div>
+    <button type="button" class="btn btn-sm btn-danger ch-del" style="margin-top:6px">Remover filho</button></div>`;
+  openModal({
+    title: c.id ? "Editar contato" : "Novo contato", wide: true,
+    body: `
+      <div class="grid-2">${field("Nome", `<input id="f-name" value="${esc(c.name || "")}">`)}
+        ${field("Idade", `<input id="f-age" type="number" value="${esc(c.age ?? "")}">`)}</div>
+      <div class="grid-2">${field("E-mail", `<input id="f-email" type="email" value="${esc(c.email || "")}">`)}
+        ${field("Telefone", `<input id="f-phone" value="${esc(c.phone || "")}">`)}</div>
+      ${field("Tags", `<input id="f-tags" value="${esc(c.tags || "")}" placeholder="executivo, primeira mentoria">`)}
+      ${field("Notas", `<textarea id="f-notes">${esc(c.notes || "")}</textarea>`)}
+      <label class="ckline"><input type="checkbox" id="f-mentee" ${c.is_mentee ? "checked" : ""}> É mentorado</label>
+      <div class="divider"></div>
+      <label class="ckline"><input type="checkbox" id="f-married" ${c.is_married ? "checked" : ""}> Casado(a)</label>
+      <div id="spouse-box" style="${c.is_married ? "" : "display:none"}">
+        <div class="grid-2">${field("Nome do cônjuge", `<input id="f-spouse-name" value="${esc(c.spouse_name || "")}">`)}
+          ${field("Idade do cônjuge", `<input id="f-spouse-age" type="number" value="${esc(c.spouse_age ?? "")}">`)}</div>
+        <label class="ckline"><input type="checkbox" id="f-spouse-works" ${c.spouse_works ? "checked" : ""}> Cônjuge trabalha</label>
+        <div id="spouse-work" class="grid-2" style="${c.spouse_works ? "" : "display:none"}">
+          ${field("Onde", `<input id="f-spouse-workplace" value="${esc(c.spouse_workplace || "")}">`)}
+          ${field("Função", `<input id="f-spouse-role" value="${esc(c.spouse_role || "")}">`)}</div>
+      </div>
+      <div class="divider"></div>
+      <div class="sechdr"><span class="sectitle">Filhos</span></div>
+      <div id="children-list">${kids.map(childBlock).join("")}</div>
+      <button class="btn btn-sm" type="button" id="add-child">+ Filho</button>`,
+    onSave: async () => {
+      const name = val("f-name"); if (!name) { toast("Informe o nome."); throw 0; }
+      const married = $("#f-married").checked, sworks = $("#f-spouse-works").checked;
+      const children = $$(".child-row").map((r) => ({
+        name: $(".ch-name", r).value.trim(), age: numOrNull($(".ch-age", r).value),
+        works: $(".ch-works", r).checked, workplace: $(".ch-workplace", r).value.trim(), role: $(".ch-role", r).value.trim(),
+      })).filter((k) => k.name);
+      await save("contacts", {
+        name, age: numOrNull(val("f-age")), email: val("f-email"), phone: val("f-phone"),
+        tags: val("f-tags"), notes: val("f-notes"), is_mentee: $("#f-mentee").checked,
+        is_married: married, spouse_name: married ? val("f-spouse-name") : null,
+        spouse_age: married ? numOrNull(val("f-spouse-age")) : null, spouse_works: married && sworks,
+        spouse_workplace: (married && sworks) ? val("f-spouse-workplace") : null,
+        spouse_role: (married && sworks) ? val("f-spouse-role") : null, children,
+      }, c.id);
+      toast("Contato salvo."); done();
+    },
+  });
+  const bindChildWorks = () => $$(".ch-works").forEach((cb) => cb.onchange = () => { cb.closest(".child-row").querySelector(".ch-workbox").style.display = cb.checked ? "" : "none"; });
+  const bindChildDel = () => $$(".ch-del").forEach((b) => b.onclick = () => b.closest(".child-row").remove());
+  $("#f-married").onchange = (e) => $("#spouse-box").style.display = e.target.checked ? "" : "none";
+  $("#f-spouse-works").onchange = (e) => $("#spouse-work").style.display = e.target.checked ? "" : "none";
+  $("#add-child").onclick = () => { $("#children-list").insertAdjacentHTML("beforeend", childBlock()); bindChildWorks(); bindChildDel(); };
+  bindChildWorks(); bindChildDel();
 }
 
 /* ===================================================================
@@ -221,7 +364,9 @@ function programForm(p = {}) {
       ${field("Descrição", `<textarea id="f-desc">${esc(p.description || "")}</textarea>`)}`,
     onSave: async () => {
       const title = val("f-title"); if (!title) { toast("Informe o título."); throw 0; }
-      await save("programs", { title, objective: val("f-objective"), description: val("f-desc"), status: val("f-status"), contact_id: val("f-contact") || null, start_date: val("f-start") || null, end_date: val("f-end") || null, total_value: numOrNull(val("f-value")) || 0 }, p.id);
+      const contactId = val("f-contact") || null;
+      await save("programs", { title, objective: val("f-objective"), description: val("f-desc"), status: val("f-status"), contact_id: contactId, start_date: val("f-start") || null, end_date: val("f-end") || null, total_value: numOrNull(val("f-value")) || 0 }, p.id);
+      if (contactId) await save("contacts", { is_mentee: true }, contactId);
       toast("Mentoria salva."); await loadPrograms(); renderPrograms();
     },
   });
