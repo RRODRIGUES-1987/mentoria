@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.3.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -41,30 +41,21 @@ const sechdr = (eyebrow, title, btnId, btnLabel) =>
    ${btnId ? `<button class="btn btn-p" id="${btnId}">${esc(btnLabel)}</button>` : ""}</div>`;
 
 /* ---------- estado ---------- */
-const state = { user: null, contacts: [], programs: [], currentProgram: null, authMode: "signin" };
+const state = { user: null, contacts: [], programs: [], currentProgram: null };
 
-/* ---------- AUTH ---------- */
+/* ---------- loading ---------- */
+const showLoading = () => $("#loading").classList.remove("hidden");
+const hideLoading = () => $("#loading").classList.add("hidden");
+
+/* ---------- AUTH (somente login; contas são criadas no Admin) ---------- */
 const A = {
   screen: $("#auth-screen"), app: $("#app"), email: $("#auth-email"), pass: $("#auth-pass"),
-  submit: $("#auth-submit"), msg: $("#auth-msg"), title: $("#auth-title"), sub: $("#auth-sub"),
-  toggleText: $("#auth-toggle-text"), toggleBtn: $("#auth-toggle-btn"),
+  submit: $("#auth-submit"), msg: $("#auth-msg"),
 };
-function setAuthMode(mode) {
-  state.authMode = mode;
-  const signin = mode === "signin";
-  A.title.textContent = signin ? "Bem-vindo de volta" : "Criar sua conta";
-  A.sub.textContent = signin ? "Acesse para gerir seus programas de mentoria." : "Comece a organizar seus mentorados.";
-  A.submit.textContent = signin ? "Entrar" : "Criar conta";
-  A.toggleText.textContent = signin ? "Ainda não tem conta?" : "Já tem conta?";
-  A.toggleBtn.textContent = signin ? "Criar conta" : "Entrar";
-  A.msg.className = "msg msg-err";
-}
-A.toggleBtn.onclick = () => setAuthMode(state.authMode === "signin" ? "signup" : "signin");
 function showAuthMsg(msg, kind) { A.msg.textContent = msg; A.msg.className = "msg " + (kind === "ok" ? "msg-ok" : "msg-err") + " show"; }
 function authErr(m) {
   if (/invalid login/i.test(m)) return "E-mail ou senha incorretos.";
-  if (/already registered/i.test(m)) return "Este e-mail já está cadastrado.";
-  if (/at least 6/i.test(m)) return "A senha precisa de ao menos 6 caracteres.";
+  if (/email not confirmed/i.test(m)) return "E-mail ainda não confirmado.";
   return m;
 }
 async function handleAuth() {
@@ -72,16 +63,10 @@ async function handleAuth() {
   if (!email || !password) return showAuthMsg("Preencha e-mail e senha.");
   A.submit.disabled = true; A.submit.textContent = "Aguarde…";
   try {
-    if (state.authMode === "signin") {
-      const { error } = await supa.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-    } else {
-      const { data, error } = await supa.auth.signUp({ email, password });
-      if (error) throw error;
-      if (!data.session) { showAuthMsg("Conta criada! Confirme pelo e-mail e depois entre.", "ok"); setAuthMode("signin"); return; }
-    }
+    const { error } = await supa.auth.signInWithPassword({ email, password });
+    if (error) throw error;
   } catch (e) { showAuthMsg(authErr(e.message)); }
-  finally { A.submit.disabled = false; A.submit.textContent = state.authMode === "signin" ? "Entrar" : "Criar conta"; }
+  finally { A.submit.disabled = false; A.submit.textContent = "Entrar"; }
 }
 A.submit.onclick = handleAuth;
 A.pass.addEventListener("keydown", (e) => { if (e.key === "Enter") handleAuth(); });
@@ -89,7 +74,10 @@ A.pass.addEventListener("keydown", (e) => { if (e.key === "Enter") handleAuth();
 $("#logout-btn").onclick = async () => { await supa.auth.signOut(); };
 $("#logout-mobile").onclick = async () => { if (confirm("Sair da conta?")) await supa.auth.signOut(); };
 
-supa.auth.onAuthStateChange((_e, session) => { if (session?.user) onLogin(session.user); else onLogout(); });
+supa.auth.onAuthStateChange((event, session) => {
+  if (event === "SIGNED_OUT" || !session?.user) { onLogout(); return; }
+  if (!state.user) onLogin(session.user);
+});
 
 async function onLogin(user) {
   state.user = user;
@@ -112,7 +100,10 @@ async function onLogin(user) {
   const roleEl = $(".sburole"); if (roleEl) roleEl.textContent = prof?.companies?.name || (state.isSuperAdmin ? "Super admin" : "Mentor");
   applyPermissions();
   await Promise.all([loadContacts(), loadPrograms()]);
-  showView(firstView());
+  let last = null; try { last = sessionStorage.getItem("mentoria_view"); } catch (_) {}
+  const b = last && $(`.navitem[data-view="${last}"]`);
+  showView(b && !b.classList.contains("hidden") ? last : firstView());
+  hideLoading();
 }
 function applyPermissions() {
   $$(".navitem[data-view]").forEach((b) => {
@@ -128,7 +119,7 @@ function firstView() {
 }
 function onLogout() {
   state.user = null; state.contacts = []; state.programs = []; state.profile = null; state.isSuperAdmin = false;
-  A.app.classList.add("hidden"); A.screen.classList.remove("hidden");
+  A.app.classList.add("hidden"); A.screen.classList.remove("hidden"); hideLoading();
   A.email.value = ""; A.pass.value = "";
 }
 
@@ -152,6 +143,7 @@ function showView(name) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $$(".navitem[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   $("#view-" + name).classList.remove("hidden");
+  try { sessionStorage.setItem("mentoria_view", name); } catch (_) {}
   $("#dtitle").textContent = TITLES[name] || "Mentoria";
   $("#content").scrollTop = 0;
   ({ contacts: renderContacts, programs: renderPrograms, evaluations: renderEvaluations, billings: renderBillings, admin: renderAdmin })[name]?.();
@@ -242,6 +234,7 @@ async function openContactDetail(id) {
     <div class="infocard"><div class="infogrid">
       <div><div class="lbl">E-mail</div><div class="v">${esc(c.email || "—")}</div></div>
       <div><div class="lbl">Telefone</div><div class="v">${esc(c.phone || "—")}</div></div>
+      <div><div class="lbl">Cadastrado em</div><div class="v">${c.created_at ? new Date(c.created_at).toLocaleDateString("pt-BR") : "—"}</div></div>
       ${c.tags ? `<div><div class="lbl">Tags</div><div class="v">${esc(c.tags)}</div></div>` : ""}
     </div>${c.notes ? `<div class="divider"></div><div class="muted">${esc(c.notes)}</div>` : ""}</div>
     ${familyHtml(c)}
@@ -254,7 +247,10 @@ async function openContactDetail(id) {
         <div class="lright">${badge(p.status)}</div></div>`).join("") : emptyState("Nenhuma mentoria ainda. Crie em Mentorias.")}` : ""}`;
   $("#cd-back").onclick = () => showView("contacts");
   $("#cd-edit").onclick = () => contactForm(c, () => openContactDetail(id));
-  $("#cd-mentee").onclick = async () => { await save("contacts", { is_mentee: !c.is_mentee }, id); toast(c.is_mentee ? "Removido de mentorados." : "Agora é mentorado."); openContactDetail(id); };
+  $("#cd-mentee").onclick = async () => {
+    if (c.is_mentee) { await save("contacts", { is_mentee: false }, id); toast("Removido de mentorados."); openContactDetail(id); }
+    else mentorshipSetupForm(c);
+  };
   $$("[data-prog]", v).forEach((el) => el.onclick = () => openProgramDetail(el.dataset.prog));
   $("#add-pos").onclick = () => positionForm({ contact_id: id });
   renderContactPositions(id);
@@ -293,6 +289,60 @@ function positionForm(p = {}) {
       toast("Cargo salvo."); renderContactPositions(cid);
     },
   });
+}
+
+/* ---------- tornar mentorado: cria a mentoria configurada ---------- */
+const FREQ = ["semanal", "quinzenal", "mensal", "bimestral"];
+function addMonths(iso, n) { const d = new Date(iso + "T00:00:00"); d.setMonth(d.getMonth() + n); return d.toISOString().slice(0, 10); }
+function mentorshipSetupForm(c) {
+  const today = todayISO();
+  openModal({
+    title: "Tornar mentorado — nova mentoria", wide: true, saveLabel: "Criar mentoria",
+    body: `<p class="muted" style="font-size:12px;margin-bottom:12px">Configure a mentoria de <strong>${esc(c.name)}</strong>.</p>
+      ${field("Título", `<input id="f-title" value="Mentoria — ${esc(c.name)}">`)}
+      ${field("Objetivo", `<input id="f-objective" placeholder="Ex.: desenvolver liderança">`)}
+      <div class="grid-2">${field("Início", `<input id="f-start" type="date" value="${today}">`)}
+        ${field("Frequência de reuniões", `<select id="f-freq">${FREQ.map((f) => `<option>${f}</option>`).join("")}</select>`)}</div>
+      <label class="ckline"><input type="checkbox" id="f-billed"> Mentoria cobrada</label>
+      <div id="billing-box" style="display:none">
+        <div class="grid-3">${field("Duração (meses)", `<input id="f-months" type="number" value="6">`)}
+          ${field("Valor total (R$)", `<input id="f-total" type="number" step="0.01" placeholder="0,00">`)}
+          ${field("Nº de parcelas", `<input id="f-inst" type="number" value="6">`)}</div>
+        ${field("Forma de pagamento", `<input id="f-pay" placeholder="PIX, boleto, cartão...">`)}
+        <label class="ckline"><input type="checkbox" id="f-gen" checked> Gerar as parcelas no faturamento automaticamente</label>
+      </div>`,
+    onSave: async () => {
+      const title = val("f-title"); if (!title) { toast("Informe o título."); throw 0; }
+      const billed = $("#f-billed").checked;
+      const months = numOrNull(val("f-months"));
+      const total = numOrNull(val("f-total")) || 0;
+      const inst = numOrNull(val("f-inst")) || 0;
+      const start = val("f-start") || todayISO();
+      const payload = {
+        title, objective: val("f-objective"), status: "ativo", contact_id: c.id,
+        start_date: start, end_date: billed && months ? addMonths(start, months) : null, total_value: total,
+        meeting_frequency: val("f-freq"), is_billed: billed,
+        contract_months: billed ? months : null, installments: billed ? inst : null, payment_method: billed ? val("f-pay") : null,
+        user_id: state.user.id,
+      };
+      if (state.companyId) payload.company_id = state.companyId;
+      const { data: prog, error } = await supa.from("programs").insert(payload).select().single();
+      if (error) { toast(error.message); throw 0; }
+      await supa.from("contacts").update({ is_mentee: true }).eq("id", c.id);
+      if (billed && inst > 0 && total > 0 && $("#f-gen").checked) {
+        const base = Math.floor((total / inst) * 100) / 100;
+        const rows = [];
+        for (let i = 0; i < inst; i++) {
+          const amount = i === inst - 1 ? Math.round((total - base * (inst - 1)) * 100) / 100 : base;
+          rows.push({ user_id: state.user.id, company_id: state.companyId || null, program_id: prog.id, description: `Parcela ${i + 1}/${inst}`, amount, due_date: addMonths(start, i), status: "pendente" });
+        }
+        const { error: bErr } = await supa.from("billings").insert(rows);
+        if (bErr) toast("Mentoria criada, mas as parcelas falharam: " + bErr.message);
+      }
+      toast("Mentoria criada!"); await loadPrograms(); openProgramDetail(prog.id);
+    },
+  });
+  $("#f-billed").onchange = (e) => $("#billing-box").style.display = e.target.checked ? "" : "none";
 }
 
 /* ---------- formulário do contato ---------- */
@@ -417,7 +467,9 @@ async function openProgramDetail(id, tab = "encontros") {
     <div class="infocard"><div class="infogrid">
       <div><div class="lbl">Objetivo</div><div class="v">${esc(p.objective || "—")}</div></div>
       <div><div class="lbl">Período</div><div class="v">${fmtDate(p.start_date)} → ${fmtDate(p.end_date)}</div></div>
+      ${p.meeting_frequency ? `<div><div class="lbl">Frequência</div><div class="v" style="text-transform:capitalize">${esc(p.meeting_frequency)}</div></div>` : ""}
       <div><div class="lbl">Valor total</div><div class="v">${money(p.total_value)}</div></div>
+      ${p.is_billed ? `<div><div class="lbl">Contrato</div><div class="v">${p.contract_months || "?"} meses · ${p.installments || "?"}x${p.payment_method ? " · " + esc(p.payment_method) : ""}</div></div>` : ""}
     </div>${p.description ? `<div class="divider"></div><div class="muted">${esc(p.description)}</div>` : ""}</div>
     <div class="tabs">
       <button class="tab" data-tab="encontros">Encontros</button>
@@ -729,7 +781,8 @@ function setVersion() { try { $$(".ver-badge").forEach((e) => { e.textContent = 
 console.log("%cMentoria app.js v" + APP_VERSION, "font-weight:bold");
 setVersion();
 (async () => {
+  showLoading();
   const { data } = await supa.auth.getSession();
   if (data.session?.user) onLogin(data.session.user);
-  else { setAuthMode("signin"); onLogout(); }
+  else { A.app.classList.add("hidden"); A.screen.classList.remove("hidden"); hideLoading(); }
 })();
