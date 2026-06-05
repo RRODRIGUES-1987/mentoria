@@ -1,4 +1,4 @@
-<!-- Mentoria App | v1.2.1 -->
+<!-- Mentoria App | v1.3.0 -->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -6,15 +6,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1a1a1a">
 <title>Mentoria</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231a1a1a'/%3E%3Ctext x='50' y='50' dy='.36em' text-anchor='middle' font-family='DM Sans,Arial,sans-serif' font-size='62' font-weight='700' fill='%23ffffff'%3EM%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 
+<!-- ============================= LOADING ============================= -->
+<div id="loading"><div class="spinner"></div></div>
+
 <!-- ============================= AUTH ============================= -->
-<div id="auth-screen" class="auth-wrap">
+<div id="auth-screen" class="auth-wrap hidden">
   <div class="auth-card">
     <div class="auth-logo"><div class="auth-logo-icon">M</div>
       <div class="auth-logo-name">Mentor<span>ia</span></div></div>
@@ -26,8 +30,10 @@
     <div class="fg"><label class="fl">Senha</label>
       <input class="fi" id="auth-pass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
     <button class="btn-full" id="auth-submit">Entrar</button>
-    <div class="auth-switch"><span id="auth-toggle-text">Ainda não tem conta?</span>
-      <button id="auth-toggle-btn">Criar conta</button></div>
+    <div class="auth-credits">
+      <div class="cred-1">Developed by <strong>Robson Rodrigues</strong></div>
+      <div class="cred-2">I.A. powered by <strong>Claude</strong></div>
+    </div>
   </div>
 </div>
 
@@ -94,7 +100,7 @@
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="config.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="config.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>
