@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.8.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -266,6 +266,7 @@ async function openContactDetail(id) {
       <span class="sectitle">${esc(c.name)}${c.age ? ` · ${c.age} anos` : ""}</span></div>
       <div class="row" style="gap:6px">
         <button class="btn btn-sm" id="cd-edit">Editar</button>
+        ${c.is_mentee ? `<button class="btn btn-sm" id="cd-report">Relatório</button>` : ""}
         <button class="btn btn-sm ${c.is_mentee ? "" : "btn-p"}" id="cd-mentee">${c.is_mentee ? "Remover de mentorados" : "Tornar mentorado"}</button>
       </div></div>
     <div class="infocard"><div class="infogrid">
@@ -289,6 +290,7 @@ async function openContactDetail(id) {
         </div></div>`).join("") : emptyState("Nenhuma mentoria ainda. Crie em Mentorias.")}` : ""}`;
   $("#cd-back").onclick = () => showView("contacts");
   $("#cd-edit").onclick = () => contactForm(c, () => openContactDetail(id));
+  const rpBtn = $("#cd-report"); if (rpBtn) rpBtn.onclick = () => openReport(id);
   $("#cd-mentee").onclick = async () => {
     if (c.is_mentee) { await save("contacts", { is_mentee: false }, id); toast("Removido de mentorados."); openContactDetail(id); }
     else mentorshipSetupForm(c);
@@ -331,6 +333,47 @@ function positionForm(p = {}) {
       toast("Cargo salvo."); renderContactPositions(cid);
     },
   });
+}
+
+/* ---------- relatório consolidado do mentorado ---------- */
+async function openReport(contactId) {
+  await loadContacts(); await loadPrograms();
+  const c = state.contacts.find((x) => x.id === contactId); if (!c) return;
+  const progs = state.programs.filter((p) => p.contact_id === contactId);
+  const ids = progs.map((p) => p.id);
+  let meetings = [];
+  if (ids.length) { const { data } = await supa.from("meetings").select("*").in("program_id", ids); meetings = data || []; }
+  $$(".view").forEach((v) => v.classList.add("hidden"));
+  $$(".navitem[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === "contacts"));
+  $("#dtitle").textContent = "Relatório — " + c.name;
+  const v = $("#view-report"); v.classList.remove("hidden");
+  const withNotes = meetings.filter((m) => m.key_points || m.action_items || m.notes)
+    .sort((a, b) => (a.scheduled_at && b.scheduled_at) ? new Date(a.scheduled_at) - new Date(b.scheduled_at) : (a.seq || 0) - (b.seq || 0));
+  const mDone = meetings.filter((m) => m.status === "realizado").length;
+  const fld = (label, txt) => txt ? `<div class="rp-field"><span class="rp-flabel">${label}:</span> <span style="white-space:pre-wrap">${esc(txt)}</span></div>` : "";
+  v.innerHTML = `
+    <div class="report-actions">
+      <button class="back-link" id="rp-back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>Voltar ao contato</button>
+      <button class="btn btn-p btn-sm" id="rp-print">Imprimir / PDF</button>
+    </div>
+    <div class="report">
+      <div class="rp-head">
+        <div class="rp-title">Relatório de mentoria</div>
+        <div class="rp-name">${esc(c.name)}</div>
+        ${progs.length ? `<div class="rp-meta">${progs.map((p) => esc(p.title)).join(" · ")}</div>` : ""}
+        <div class="rp-meta">${mDone} encontro(s) realizado(s) · Gerado em ${new Date().toLocaleDateString("pt-BR")}</div>
+      </div>
+      ${withNotes.length ? withNotes.map((m, i) => `
+        <div class="rp-entry">
+          <div class="rp-entry-head"><strong>${esc(m.topic || ("Encontro " + (m.seq || i + 1)))}</strong>
+            <span class="rp-date">${m.scheduled_at ? fmtDateTime(m.scheduled_at) : "sem data"}</span> ${badge(m.status)}</div>
+          ${fld("Pontos relevantes", m.key_points)}
+          ${fld("Compromissos & próximos passos", m.action_items)}
+          ${fld("Observações", m.notes)}
+        </div>`).join("") : `<div class="muted">Nenhuma anotação registrada nos encontros ainda.</div>`}
+    </div>`;
+  $("#rp-back").onclick = () => openContactDetail(contactId);
+  $("#rp-print").onclick = () => window.print();
 }
 
 /* ---------- criar mentoria (gera contrato + encontros) ---------- */
