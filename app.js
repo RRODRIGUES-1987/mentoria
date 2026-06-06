@@ -1,5 +1,5 @@
 /* =====================================================================
-   Mentoria App — Lógica (estilo VERUS) 
+   Mentoria App — Lógica (estilo VERUS)
    ===================================================================== */
 const cfg = window.SUPABASE_CONFIG || {};
 if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.6.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -243,16 +243,20 @@ async function openContactDetail(id) {
       <button class="btn btn-p btn-sm" id="add-pos">+ Cargo</button></div>
     <div id="positions-list"></div>
     ${c.is_mentee ? `<div class="sechdr" style="margin-top:18px"><span class="sectitle">Mentorias</span></div>
-      ${progs.length ? progs.map((p) => `<div class="li clickable" data-prog="${p.id}">
-        <div class="linfo"><div class="lname">${esc(p.title)}</div><div class="lsub">${esc(p.objective || "")}</div></div>
-        <div class="lright">${badge(p.status)}</div></div>`).join("") : emptyState("Nenhuma mentoria ainda. Crie em Mentorias.")}` : ""}`;
+      ${progs.length ? progs.map((p) => `<div class="li" style="flex-direction:column;align-items:stretch;gap:10px">
+        <div class="row spread"><div><div class="lname">${esc(p.title)}</div><div class="lsub">${esc(p.objective || "")}</div></div>${badge(p.status)}</div>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm" data-go="encontros" data-prog="${p.id}">Encontros</button>
+          <button class="btn btn-sm" data-go="avaliacoes" data-prog="${p.id}">Avaliações</button>
+          <button class="btn btn-sm" data-go="faturamento" data-prog="${p.id}">Faturas</button>
+        </div></div>`).join("") : emptyState("Nenhuma mentoria ainda. Crie em Mentorias.")}` : ""}`;
   $("#cd-back").onclick = () => showView("contacts");
   $("#cd-edit").onclick = () => contactForm(c, () => openContactDetail(id));
   $("#cd-mentee").onclick = async () => {
     if (c.is_mentee) { await save("contacts", { is_mentee: false }, id); toast("Removido de mentorados."); openContactDetail(id); }
     else mentorshipSetupForm(c);
   };
-  $$("[data-prog]", v).forEach((el) => el.onclick = () => openProgramDetail(el.dataset.prog));
+  $$("[data-go]", v).forEach((el) => el.onclick = () => openProgramDetail(el.dataset.prog, el.dataset.go, () => openContactDetail(id)));
   $("#add-pos").onclick = () => positionForm({ contact_id: id });
   renderContactPositions(id);
 }
@@ -488,18 +492,21 @@ function programForm(p = {}) {
   });
 }
 
-/* ---------- detalhe da mentoria ---------- */
-async function openProgramDetail(id, tab = "encontros") {
+/* ---------- detalhe da mentoria (sem abas; seção única) ---------- */
+const SECT_LABEL = { encontros: "Encontros", avaliacoes: "Avaliações", faturamento: "Faturas" };
+async function openProgramDetail(id, section = "encontros", back) {
   await loadPrograms();
   const p = state.programs.find((x) => x.id === id); if (!p) return;
   state.currentProgram = p;
+  state.detailBack = back || (() => showView("programs"));
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $$(".navitem[data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === "programs"));
   $("#dtitle").textContent = p.title;
   const v = $("#view-program-detail"); v.classList.remove("hidden");
   v.innerHTML = `
-    <button class="back-link" id="pd-back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>Mentorias</button>
-    <div class="sechdr"><div><div class="eyebrow">${esc(p.contacts?.name || "Mentoria")}</div><span class="sectitle">${esc(p.title)}</span></div>${badge(p.status)}</div>
+    <button class="back-link" id="pd-back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>Voltar</button>
+    <div class="sechdr"><div><div class="eyebrow">${p.contacts?.name ? `<span id="pd-contact" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px">${esc(p.contacts.name)}</span> · ` : ""}${esc(SECT_LABEL[section] || "")}</div>
+      <span class="sectitle">${esc(p.title)}</span></div>${badge(p.status)}</div>
     <div class="infocard"><div class="infogrid">
       <div><div class="lbl">Objetivo</div><div class="v">${esc(p.objective || "—")}</div></div>
       <div><div class="lbl">Período</div><div class="v">${fmtDate(p.start_date)} → ${fmtDate(p.end_date)}</div></div>
@@ -507,19 +514,10 @@ async function openProgramDetail(id, tab = "encontros") {
       <div><div class="lbl">Valor total</div><div class="v">${money(p.total_value)}</div></div>
       ${p.is_billed ? `<div><div class="lbl">Contrato</div><div class="v">${p.contract_months || "?"} meses · ${p.installments || "?"}x${p.payment_method ? " · " + esc(p.payment_method) : ""}</div></div>` : ""}
     </div>${p.description ? `<div class="divider"></div><div class="muted">${esc(p.description)}</div>` : ""}</div>
-    <div class="tabs">
-      <button class="tab" data-tab="encontros">Encontros</button>
-      <button class="tab" data-tab="avaliacoes">Avaliações</button>
-      <button class="tab" data-tab="faturamento">Faturas</button>
-    </div>
     <div id="pd-content"></div>`;
-  $("#pd-back").onclick = () => showView("programs");
-  $$(".tab", v).forEach((b) => b.onclick = () => switchTab(b.dataset.tab));
-  switchTab(tab);
-}
-function switchTab(tab) {
-  $$("#view-program-detail .tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-  ({ encontros: renderMeetings, avaliacoes: renderProgramEvals, faturamento: renderProgramBillings })[tab]();
+  $("#pd-back").onclick = () => state.detailBack();
+  const pc = $("#pd-contact"); if (pc && p.contact_id) pc.onclick = () => openContactDetail(p.contact_id);
+  ({ encontros: renderMeetings, avaliacoes: renderProgramEvals, faturamento: renderProgramBillings })[section]?.();
 }
 
 /* ---------- encontros ---------- */
@@ -682,7 +680,7 @@ async function renderEvaluations() {
           <div class="lsub">${esc(ev.programs?.title || "")}${ev.period ? " · " + esc(ev.period) : ""} · ${fmtDate(ev.evaluated_at)}</div></div>
         <div class="lright muted">abrir ›</div>
       </div>`).join("") : emptyState("Nenhuma avaliação ainda. Abra uma mentoria para adicionar."));
-  $$("[data-open]", v).forEach((el) => el.onclick = () => openProgramDetail(el.dataset.open, "avaliacoes"));
+  $$("[data-open]", v).forEach((el) => el.onclick = () => openProgramDetail(el.dataset.open, "avaliacoes", () => showView("evaluations")));
 }
 
 /* ===================================================================
