@@ -200,3 +200,16 @@ button{font-family:inherit;cursor:pointer}
 .att-name{flex:1;font-size:13px;font-weight:500;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .att-name:hover{opacity:.7}
 .att-size{font-size:11px;color:var(--text3);white-space:nowrap}
+
+/* ── linha do tempo horizontal (acompanhamento do mentorado) ── */
+.timeline{overflow-x:auto;padding:10px 2px 6px;-webkit-overflow-scrolling:touch}
+.tl-track{display:flex;align-items:flex-start;min-width:min-content}
+.tl-node{display:flex;flex-direction:column;align-items:center;min-width:82px;position:relative}
+.tl-node::before{content:"";position:absolute;top:7px;left:-50%;width:100%;height:2px;background:var(--border2)}
+.tl-node:first-child::before{display:none}
+.tl-dot{width:14px;height:14px;border-radius:50%;background:var(--bg);border:2px solid var(--border2);z-index:1}
+.tl-dot.done{background:var(--green);border-color:var(--green)}
+.tl-dot.sched{background:var(--amber-text);border-color:var(--amber-text)}
+.tl-dot.canc{background:var(--red);border-color:var(--red)}
+.tl-date{font-size:10px;font-weight:600;margin-top:6px}
+.tl-label{font-size:10px;color:var(--text2);text-align:center;max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
