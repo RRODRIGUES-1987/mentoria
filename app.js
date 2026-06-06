@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.4.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -22,8 +22,9 @@ const fmtDateTime = (d) => d ? new Date(d).toLocaleString("pt-BR", { day: "2-dig
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const ini = (n) => !n ? "?" : n.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const avClass = (s) => "av" + (Math.abs([...String(s || "")].reduce((a, c) => a + c.charCodeAt(0), 0)) % 5);
-const BADGE = { ativo: "bg", realizado: "bg", pago: "bg", pendente: "ba", agendado: "ba", pausado: "ba", atrasado: "br", cancelado: "br", concluido: "bb", remarcado: "bgr" };
-const badge = (s) => `<span class="bdg ${BADGE[s] || "bgr"}">${esc(s)}</span>`;
+const BADGE = { ativo: "bg", realizado: "bg", pago: "bg", pendente: "ba", agendado: "ba", pausado: "ba", a_agendar: "bgr", atrasado: "br", cancelado: "br", concluido: "bb", remarcado: "bgr" };
+const badgeLabel = (s) => s === "a_agendar" ? "a agendar" : s;
+const badge = (s) => `<span class="bdg ${BADGE[s] || "bgr"}">${esc(badgeLabel(s))}</span>`;
 
 const ICON = {
   edit:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>',
@@ -291,44 +292,65 @@ function positionForm(p = {}) {
   });
 }
 
-/* ---------- tornar mentorado: cria a mentoria configurada ---------- */
+/* ---------- criar mentoria (gera contrato + encontros) ---------- */
 const FREQ = ["semanal", "quinzenal", "mensal", "bimestral"];
+const FREQ_PER_MONTH = { semanal: 4, quinzenal: 2, mensal: 1, bimestral: 0.5 };
+const meetingCount = (freq, months) => Math.max(1, Math.round((months || 0) * (FREQ_PER_MONTH[freq] || 1)));
 function addMonths(iso, n) { const d = new Date(iso + "T00:00:00"); d.setMonth(d.getMonth() + n); return d.toISOString().slice(0, 10); }
+
 function mentorshipSetupForm(c) {
   const today = todayISO();
+  const contactField = c
+    ? `<input type="hidden" id="f-contact" value="${c.id}">`
+    : field("Mentorado", `<select id="f-contact"><option value="">— selecione —</option>${state.contacts.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>`);
   openModal({
-    title: "Tornar mentorado — nova mentoria", wide: true, saveLabel: "Criar mentoria",
-    body: `<p class="muted" style="font-size:12px;margin-bottom:12px">Configure a mentoria de <strong>${esc(c.name)}</strong>.</p>
-      ${field("Título", `<input id="f-title" value="Mentoria — ${esc(c.name)}">`)}
+    title: c ? "Tornar mentorado — nova mentoria" : "Nova mentoria", wide: true, saveLabel: "Criar mentoria",
+    body: `${c ? `<p class="muted" style="font-size:12px;margin-bottom:12px">Configure a mentoria de <strong>${esc(c.name)}</strong>.</p>` : ""}
+      ${contactField}
+      ${field("Título", `<input id="f-title" value="${c ? "Mentoria — " + esc(c.name) : ""}">`)}
       ${field("Objetivo", `<input id="f-objective" placeholder="Ex.: desenvolver liderança">`)}
-      <div class="grid-2">${field("Início", `<input id="f-start" type="date" value="${today}">`)}
-        ${field("Frequência de reuniões", `<select id="f-freq">${FREQ.map((f) => `<option>${f}</option>`).join("")}</select>`)}</div>
+      <div class="grid-3">${field("Início", `<input id="f-start" type="date" value="${today}">`)}
+        ${field("Prazo (meses)", `<input id="f-months" type="number" min="1" value="6">`)}
+        ${field("Frequência", `<select id="f-freq">${FREQ.map((f) => `<option>${f}</option>`).join("")}</select>`)}</div>
+      <label class="ckline"><input type="checkbox" id="f-gen-meet" checked> Gerar os encontros automaticamente</label>
+      <div class="muted" id="meet-preview" style="font-size:12px;margin:-2px 0 8px"></div>
+      <div class="divider"></div>
       <label class="ckline"><input type="checkbox" id="f-billed"> Mentoria cobrada</label>
       <div id="billing-box" style="display:none">
-        <div class="grid-3">${field("Duração (meses)", `<input id="f-months" type="number" value="6">`)}
-          ${field("Valor total (R$)", `<input id="f-total" type="number" step="0.01" placeholder="0,00">`)}
-          ${field("Nº de parcelas", `<input id="f-inst" type="number" value="6">`)}</div>
-        ${field("Forma de pagamento", `<input id="f-pay" placeholder="PIX, boleto, cartão...">`)}
-        <label class="ckline"><input type="checkbox" id="f-gen" checked> Gerar as parcelas no faturamento automaticamente</label>
+        <div class="grid-3">${field("Valor total (R$)", `<input id="f-total" type="number" step="0.01" placeholder="0,00">`)}
+          ${field("Nº de parcelas", `<input id="f-inst" type="number" value="6">`)}
+          ${field("Forma de pagamento", `<input id="f-pay" placeholder="PIX, boleto...">`)}</div>
+        <label class="ckline"><input type="checkbox" id="f-gen" checked> Gerar as parcelas no faturamento</label>
       </div>`,
     onSave: async () => {
+      const contactId = val("f-contact"); if (!contactId) { toast("Selecione o mentorado."); throw 0; }
       const title = val("f-title"); if (!title) { toast("Informe o título."); throw 0; }
+      const months = numOrNull(val("f-months")) || 6;
+      const freq = val("f-freq");
+      const start = val("f-start") || todayISO();
       const billed = $("#f-billed").checked;
-      const months = numOrNull(val("f-months"));
       const total = numOrNull(val("f-total")) || 0;
       const inst = numOrNull(val("f-inst")) || 0;
-      const start = val("f-start") || todayISO();
       const payload = {
-        title, objective: val("f-objective"), status: "ativo", contact_id: c.id,
-        start_date: start, end_date: billed && months ? addMonths(start, months) : null, total_value: total,
-        meeting_frequency: val("f-freq"), is_billed: billed,
-        contract_months: billed ? months : null, installments: billed ? inst : null, payment_method: billed ? val("f-pay") : null,
+        title, objective: val("f-objective"), status: "ativo", contact_id: contactId,
+        start_date: start, end_date: addMonths(start, months), total_value: total,
+        meeting_frequency: freq, contract_months: months,
+        is_billed: billed, installments: billed ? inst : null, payment_method: billed ? val("f-pay") : null,
         user_id: state.user.id,
       };
       if (state.companyId) payload.company_id = state.companyId;
       const { data: prog, error } = await supa.from("programs").insert(payload).select().single();
       if (error) { toast(error.message); throw 0; }
-      await supa.from("contacts").update({ is_mentee: true }).eq("id", c.id);
+      await supa.from("contacts").update({ is_mentee: true }).eq("id", contactId);
+      // encontros como tarefas (sem agenda ainda)
+      if ($("#f-gen-meet").checked) {
+        const n = meetingCount(freq, months);
+        const rows = [];
+        for (let i = 1; i <= n; i++) rows.push({ user_id: state.user.id, company_id: state.companyId || null, program_id: prog.id, topic: `Encontro ${i}`, status: "a_agendar", seq: i, duration_min: 60, scheduled_at: null });
+        const { error: mErr } = await supa.from("meetings").insert(rows);
+        if (mErr) toast("Mentoria criada, mas os encontros falharam: " + mErr.message);
+      }
+      // parcelas (detalhe de cobrança)
       if (billed && inst > 0 && total > 0 && $("#f-gen").checked) {
         const base = Math.floor((total / inst) * 100) / 100;
         const rows = [];
@@ -342,7 +364,11 @@ function mentorshipSetupForm(c) {
       toast("Mentoria criada!"); await loadPrograms(); openProgramDetail(prog.id);
     },
   });
+  const updatePreview = () => { const n = meetingCount(val("f-freq"), numOrNull(val("f-months"))); $("#meet-preview").textContent = $("#f-gen-meet").checked ? `Serão criados ${n} encontros para você agendar.` : ""; };
   $("#f-billed").onchange = (e) => $("#billing-box").style.display = e.target.checked ? "" : "none";
+  ["f-months", "f-freq"].forEach((id) => $("#" + id).oninput = updatePreview);
+  $("#f-gen-meet").onchange = updatePreview;
+  updatePreview();
 }
 
 /* ---------- formulário do contato ---------- */
@@ -425,7 +451,7 @@ async function renderPrograms() {
           <button class="bicon danger" data-del="${p.id}" title="Excluir">${ICON.trash}</button></div>
       </div>`).join("") : emptyState("Nenhuma mentoria cadastrada. Crie a primeira."));
 
-  $("#add-prog").onclick = () => programForm();
+  $("#add-prog").onclick = () => mentorshipSetupForm();
   $$("[data-open]", v).forEach((el) => el.onclick = (e) => { if (e.target.closest("[data-edit],[data-del]")) return; openProgramDetail(el.dataset.open); });
   $$("[data-edit]", v).forEach((b) => b.onclick = (e) => { e.stopPropagation(); programForm(state.programs.find((p) => p.id === b.dataset.edit)); });
   $$("[data-del]", v).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); if (confirm("Excluir esta mentoria? Encontros e avaliações vinculados também serão removidos.")) { await remove("programs", b.dataset.del); toast("Mentoria excluída."); renderPrograms(); } });
@@ -433,19 +459,29 @@ async function renderPrograms() {
 const contactOptions = (sel) => state.contacts.map((c) => `<option value="${c.id}" ${c.id === sel ? "selected" : ""}>${esc(c.name)}</option>`).join("");
 function programForm(p = {}) {
   openModal({
-    title: p.id ? "Editar mentoria" : "Nova mentoria", wide: true,
-    body: `${field("Título", `<input id="f-title" value="${esc(p.title || "")}" placeholder="Mentoria de liderança – João">`)}
+    title: "Editar mentoria", wide: true,
+    body: `${field("Título", `<input id="f-title" value="${esc(p.title || "")}">`)}
       <div class="grid-2">${field("Mentorado", `<select id="f-contact"><option value="">— selecione —</option>${contactOptions(p.contact_id)}</select>`)}
         ${field("Status", `<select id="f-status">${STATUS_PROG.map((s) => `<option ${s === (p.status || "ativo") ? "selected" : ""}>${s}</option>`).join("")}</select>`)}</div>
-      ${field("Objetivo", `<input id="f-objective" value="${esc(p.objective || "")}" placeholder="Desenvolver gestão de times">`)}
+      ${field("Objetivo", `<input id="f-objective" value="${esc(p.objective || "")}">`)}
       <div class="grid-3">${field("Início", `<input id="f-start" type="date" value="${esc(p.start_date || "")}">`)}
-        ${field("Término", `<input id="f-end" type="date" value="${esc(p.end_date || "")}">`)}
-        ${field("Valor total (R$)", `<input id="f-value" type="number" step="0.01" value="${esc(p.total_value ?? "")}">`)}</div>
+        ${field("Prazo (meses)", `<input id="f-months" type="number" min="1" value="${esc(p.contract_months ?? "")}">`)}
+        ${field("Frequência", `<select id="f-freq"><option value="">—</option>${FREQ.map((f) => `<option ${f === p.meeting_frequency ? "selected" : ""}>${f}</option>`).join("")}</select>`)}</div>
+      <div class="grid-2">${field("Valor total (R$)", `<input id="f-value" type="number" step="0.01" value="${esc(p.total_value ?? "")}">`)}
+        ${field("Forma de pagamento", `<input id="f-pay" value="${esc(p.payment_method || "")}">`)}</div>
+      <label class="ckline"><input type="checkbox" id="f-billed" ${p.is_billed ? "checked" : ""}> Mentoria cobrada</label>
       ${field("Descrição", `<textarea id="f-desc">${esc(p.description || "")}</textarea>`)}`,
     onSave: async () => {
       const title = val("f-title"); if (!title) { toast("Informe o título."); throw 0; }
       const contactId = val("f-contact") || null;
-      await save("programs", { title, objective: val("f-objective"), description: val("f-desc"), status: val("f-status"), contact_id: contactId, start_date: val("f-start") || null, end_date: val("f-end") || null, total_value: numOrNull(val("f-value")) || 0 }, p.id);
+      const months = numOrNull(val("f-months"));
+      const start = val("f-start") || null;
+      await save("programs", {
+        title, objective: val("f-objective"), description: val("f-desc"), status: val("f-status"), contact_id: contactId,
+        start_date: start, end_date: (start && months) ? addMonths(start, months) : (p.end_date || null),
+        contract_months: months, meeting_frequency: val("f-freq") || null,
+        total_value: numOrNull(val("f-value")) || 0, is_billed: $("#f-billed").checked, payment_method: val("f-pay") || null,
+      }, p.id);
       if (contactId) await save("contacts", { is_mentee: true }, contactId);
       toast("Mentoria salva."); await loadPrograms(); renderPrograms();
     },
@@ -487,18 +523,22 @@ function switchTab(tab) {
 }
 
 /* ---------- encontros ---------- */
-const STATUS_MEET = ["agendado", "realizado", "cancelado", "remarcado"];
+const STATUS_MEET = ["a_agendar", "agendado", "realizado", "cancelado", "remarcado"];
+const MEET_LABEL = { a_agendar: "a agendar", agendado: "agendado", realizado: "realizado", cancelado: "cancelado", remarcado: "remarcado" };
 async function renderMeetings() {
   const c = $("#pd-content");
-  const { data } = await supa.from("meetings").select("*").eq("program_id", state.currentProgram.id).order("scheduled_at", { ascending: false });
+  const { data } = await supa.from("meetings").select("*").eq("program_id", state.currentProgram.id)
+    .order("seq", { ascending: true, nullsFirst: false }).order("scheduled_at", { ascending: true, nullsFirst: false });
+  const total = (data || []).length, done = (data || []).filter((m) => m.status === "realizado").length;
   c.innerHTML = sechdr(null, "Encontros & observações", "add-meet", "+ Encontro") +
-    ((data || []).length ? data.map((m) => `
+    (total ? `<div class="muted" style="font-size:12px;margin:-4px 0 10px">${done} de ${total} realizados</div>` + data.map((m) => `
       <div class="li" style="align-items:flex-start">
-        <div class="linfo"><div class="lname">${esc(m.topic || "Encontro")} <span class="muted" style="font-weight:400">· ${fmtDateTime(m.scheduled_at)}</span></div>
+        <div class="linfo"><div class="lname">${esc(m.topic || "Encontro")} <span class="muted" style="font-weight:400">· ${m.scheduled_at ? fmtDateTime(m.scheduled_at) : "sem agenda"}</span></div>
           ${m.notes ? `<div class="lsub" style="white-space:pre-wrap;overflow:visible">${esc(m.notes)}</div>` : ""}
-          <div class="lsub">${m.duration_min} min</div></div>
+          <div class="lsub">${m.duration_min || 60} min</div></div>
         <div class="lright" style="align-items:flex-end;flex-direction:column">${badge(m.status)}
-          <div class="row" style="gap:2px"><button class="bicon" data-edit="${m.id}">${ICON.edit}</button>
+          <div class="row" style="gap:2px">
+            ${m.status === "a_agendar" ? `<button class="bicon" data-edit="${m.id}" title="Agendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></button>` : `<button class="bicon" data-edit="${m.id}">${ICON.edit}</button>`}
             <button class="bicon danger" data-del="${m.id}">${ICON.trash}</button></div></div>
       </div>`).join("") : emptyState("Nenhum encontro registrado."));
   $("#add-meet").onclick = () => meetingForm();
@@ -507,16 +547,19 @@ async function renderMeetings() {
 }
 function meetingForm(m = {}) {
   const dtVal = m.scheduled_at ? new Date(m.scheduled_at).toISOString().slice(0, 16) : "";
+  const curStatus = m.status || (m.id ? "agendado" : "a_agendar");
   openModal({
-    title: m.id ? "Editar encontro" : "Novo encontro",
-    body: `<div class="grid-2">${field("Data e hora", `<input id="f-dt" type="datetime-local" value="${dtVal}">`)}
+    title: m.id ? "Encontro — agenda e anotações" : "Novo encontro",
+    body: `<div class="grid-2">${field("Tema", `<input id="f-topic" value="${esc(m.topic || "")}">`)}
+        ${field("Status", `<select id="f-status">${STATUS_MEET.map((s) => `<option value="${s}" ${s === curStatus ? "selected" : ""}>${MEET_LABEL[s]}</option>`).join("")}</select>`)}</div>
+      <div class="grid-2">${field("Data e hora (agenda)", `<input id="f-dt" type="datetime-local" value="${dtVal}">`)}
         ${field("Duração (min)", `<input id="f-dur" type="number" value="${esc(m.duration_min || 60)}">`)}</div>
-      <div class="grid-2">${field("Tema", `<input id="f-topic" value="${esc(m.topic || "")}">`)}
-        ${field("Status", `<select id="f-status">${STATUS_MEET.map((s) => `<option ${s === (m.status || "agendado") ? "selected" : ""}>${s}</option>`).join("")}</select>`)}</div>
-      ${field("Observações do encontro", `<textarea id="f-notes" style="min-height:120px">${esc(m.notes || "")}</textarea>`)}`,
+      ${field("Anotações do encontro", `<textarea id="f-notes" style="min-height:120px" placeholder="Registre aqui o que foi discutido após a reunião.">${esc(m.notes || "")}</textarea>`)}`,
     onSave: async () => {
-      const dt = val("f-dt"); if (!dt) { toast("Informe data e hora."); throw 0; }
-      await save("meetings", { program_id: state.currentProgram.id, scheduled_at: new Date(dt).toISOString(), duration_min: numOrNull(val("f-dur")) || 60, topic: val("f-topic"), notes: val("f-notes"), status: val("f-status") }, m.id);
+      const dt = val("f-dt");
+      let status = val("f-status");
+      if (dt && status === "a_agendar") status = "agendado"; // ao definir agenda, deixa de ser tarefa pendente
+      await save("meetings", { program_id: state.currentProgram.id, scheduled_at: dt ? new Date(dt).toISOString() : null, duration_min: numOrNull(val("f-dur")) || 60, topic: val("f-topic"), notes: val("f-notes"), status, seq: m.seq ?? null }, m.id);
       toast("Encontro salvo."); renderMeetings();
     },
   });
