@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.6.0";
+const APP_VERSION = "1.7.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -214,6 +214,33 @@ function familyHtml(c) {
   return `<div class="infocard"><div class="infogrid">${spouse}</div></div>
     ${kids.length ? `<div class="sechdr" style="margin-top:6px"><span class="sectitle">Filhos (${kids.length})</span></div>${kidsHtml}` : ""}`;
 }
+function mentorshipTrackingHtml(meetings, billings) {
+  const today = todayISO();
+  const mDone = meetings.filter((m) => m.status === "realizado").length;
+  const mTotal = meetings.length;
+  const paid = billings.filter((b) => b.status === "pago");
+  const paidSum = paid.reduce((s, b) => s + Number(b.amount), 0);
+  const overdue = billings.filter((b) => b.status !== "pago" && b.status !== "cancelado" && b.due_date && b.due_date < today);
+  const overdueSum = overdue.reduce((s, b) => s + Number(b.amount), 0);
+  const dated = meetings.filter((m) => m.scheduled_at).sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  const toSchedule = meetings.filter((m) => !m.scheduled_at).length;
+  const firstDone = meetings.filter((m) => m.status === "realizado" && m.scheduled_at).sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))[0];
+  const dotClass = (s) => s === "realizado" ? "done" : (s === "cancelado" || s === "remarcado") ? "canc" : "sched";
+  const timeline = dated.length ? `<div class="timeline"><div class="tl-track">
+      ${dated.map((m) => `<div class="tl-node"><div class="tl-dot ${dotClass(m.status)}"></div>
+        <div class="tl-date">${new Date(m.scheduled_at).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}</div>
+        <div class="tl-label">${esc(m.topic || "Encontro")}</div></div>`).join("")}
+      ${toSchedule ? `<div class="tl-node"><div class="tl-dot"></div><div class="tl-date">—</div><div class="tl-label">+${toSchedule} a agendar</div></div>` : ""}
+    </div></div>` : `<div class="muted" style="font-size:12px">Nenhum encontro com data definida ainda.</div>`;
+  return `<div class="sechdr" style="margin-top:18px"><span class="sectitle">Acompanhamento</span></div>
+    <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
+      <div class="metric"><div class="mlabel">Encontros realizados</div><div class="mval">${mDone}<span style="font-size:14px;color:var(--text3)"> / ${mTotal}</span></div></div>
+      <div class="metric"><div class="mlabel">Pagamentos feitos</div><div class="mval">${paid.length}</div><div class="msub">${money(paidSum)}</div></div>
+      <div class="metric"><div class="mlabel">Em atraso</div><div class="mval" style="${overdue.length ? "color:var(--red-text)" : ""}">${overdue.length}</div><div class="msub">${money(overdueSum)}</div></div>
+    </div>
+    ${firstDone ? `<div class="muted" style="font-size:12px;margin:-6px 0 8px">Realizando encontros desde ${new Date(firstDone.scheduled_at).toLocaleDateString("pt-BR")}</div>` : ""}
+    ${timeline}`;
+}
 async function openContactDetail(id) {
   await loadContacts();
   const c = state.contacts.find((x) => x.id === id); if (!c) return;
@@ -223,6 +250,15 @@ async function openContactDetail(id) {
   $("#dtitle").textContent = c.name;
   await loadPrograms();
   const progs = state.programs.filter((p) => p.contact_id === id);
+  let trackingHtml = "";
+  if (c.is_mentee && progs.length) {
+    const ids = progs.map((p) => p.id);
+    const [{ data: meetings }, { data: billings }] = await Promise.all([
+      supa.from("meetings").select("*").in("program_id", ids),
+      supa.from("billings").select("*").in("program_id", ids),
+    ]);
+    trackingHtml = mentorshipTrackingHtml(meetings || [], billings || []);
+  }
   const v = $("#view-contact-detail"); v.classList.remove("hidden");
   v.innerHTML = `
     <button class="back-link" id="cd-back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>Contatos</button>
@@ -242,6 +278,7 @@ async function openContactDetail(id) {
     <div class="sechdr" style="margin-top:18px"><span class="sectitle">Histórico profissional</span>
       <button class="btn btn-p btn-sm" id="add-pos">+ Cargo</button></div>
     <div id="positions-list"></div>
+    ${trackingHtml}
     ${c.is_mentee ? `<div class="sechdr" style="margin-top:18px"><span class="sectitle">Mentorias</span></div>
       ${progs.length ? progs.map((p) => `<div class="li" style="flex-direction:column;align-items:stretch;gap:10px">
         <div class="row spread"><div><div class="lname">${esc(p.title)}</div><div class="lsub">${esc(p.objective || "")}</div></div>${badge(p.status)}</div>
