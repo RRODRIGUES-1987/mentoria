@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.1.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -795,8 +795,10 @@ function meetingForm(m = {}) {
 async function renderProgramEvals() {
   const c = $("#pd-content");
   const { data } = await supa.from("evaluations").select("*").eq("program_id", state.currentProgram.id).order("evaluated_at", { ascending: false });
+  const evals = data || [];
   c.innerHTML = sechdr(null, "Avaliações de performance", "add-eval", "+ Avaliação") +
-    ((data || []).length ? data.map((ev) => `
+    (evals.length ? evalPanel(evals) : "") +
+    (evals.length ? evals.map((ev) => `
       <div class="li" style="align-items:flex-start">
         <div class="av av1">${ev.overall_score != null ? ev.overall_score + "%" : "—"}</div>
         <div class="linfo"><div class="lname">${esc(ev.period || "Avaliação")} <span class="muted" style="font-weight:400">· ${fmtDate(ev.evaluated_at)}</span></div>
@@ -806,8 +808,67 @@ async function renderProgramEvals() {
           <button class="bicon danger" data-del="${ev.id}">${ICON.trash}</button></div>
       </div>`).join("") : emptyState("Nenhuma avaliação registrada."));
   $("#add-eval").onclick = () => evaluationForm();
-  $$("[data-edit]", c).forEach((b) => b.onclick = () => evaluationForm((data || []).find((e) => e.id === b.dataset.edit)));
+  $$("[data-edit]", c).forEach((b) => b.onclick = () => evaluationForm(evals.find((e) => e.id === b.dataset.edit)));
   $$("[data-del]", c).forEach((b) => b.onclick = async () => { if (confirm("Excluir esta avaliação?")) { await remove("evaluations", b.dataset.del); toast("Avaliação excluída."); renderProgramEvals(); } });
+}
+
+/* ---------- painel de avaliações (radar + evoluções) ---------- */
+const EVAL_SHORT = { 0: "Não atende", 1: "Parcial", 2: "Completo" };
+function radarChart(axes, series) {
+  const n = axes.length; if (n < 3) return "";
+  const cx = 130, cy = 125, R = 88, rings = 2;
+  const ang = (i) => -Math.PI / 2 + i * 2 * Math.PI / n;
+  const pt = (i, v) => [cx + Math.cos(ang(i)) * R * v, cy + Math.sin(ang(i)) * R * v];
+  let grid = "";
+  for (let r = 1; r <= rings; r++) { const rr = r / rings; grid += `<polygon points="${axes.map((_, i) => pt(i, rr).map((x) => x.toFixed(1)).join(",")).join(" ")}" fill="none" stroke="var(--border)"/>`; }
+  let spokes = "", labels = "";
+  axes.forEach((a, i) => {
+    const [x, y] = pt(i, 1); spokes += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--border)"/>`;
+    const [lx, ly] = pt(i, 1.16); const anchor = Math.abs(lx - cx) < 8 ? "middle" : lx > cx ? "start" : "end";
+    labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" class="radar-lbl">${esc(a.length > 13 ? a.slice(0, 12) + "…" : a)}</text>`;
+  });
+  let polys = "";
+  series.forEach((s) => { const poly = s.values.map((v, i) => pt(i, v == null ? 0 : Math.max(0, Math.min(1, v))).map((x) => x.toFixed(1)).join(",")).join(" "); polys += `<polygon points="${poly}" fill="${s.color}" fill-opacity="0.16" stroke="${s.color}" stroke-width="2"/>`; });
+  return `<svg viewBox="0 0 260 250" width="100%" height="230" style="max-width:300px">${grid}${spokes}${polys}${labels}</svg>`;
+}
+function multiLine(labels, series) {
+  const W = Math.max(labels.length * 72, 260), H = 175, padL = 12, padR = 12, padT = 14, padB = 26, plotW = W - padL - padR, plotH = H - padT - padB;
+  const xAt = (i) => labels.length <= 1 ? padL + plotW / 2 : padL + i * plotW / (labels.length - 1);
+  const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
+  let g = `<line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="var(--border)"/><line x1="${padL}" y1="${padT}" x2="${padL + plotW}" y2="${padT}" stroke="var(--border)" stroke-dasharray="2 4"/>`;
+  let xl = labels.map((l, i) => `<text x="${xAt(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="bar-lbl">${esc(l.length > 9 ? l.slice(0, 8) + "…" : l)}</text>`).join("");
+  let paths = "";
+  series.forEach((s) => {
+    const pres = s.values.map((v, i) => v == null ? null : [xAt(i), yAt(v), i]).filter(Boolean);
+    if (!pres.length) return;
+    const dd = pres.map((p, k) => (k ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+    paths += `<path d="${dd}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+    paths += pres.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3.5" fill="${s.color}"><title>${esc(s.name)} · ${esc(labels[p[2]])}: ${esc(s.fmt(s.values[p[2]]))}</title></circle>`).join("");
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="min-width:${W}px">${g}${paths}${xl}</svg>`;
+}
+function evalPanel(evals) {
+  const sorted = [...evals].sort((a, b) => (a.evaluated_at || "").localeCompare(b.evaluated_at || ""));
+  const latest = sorted[sorted.length - 1], prev = sorted.length > 1 ? sorted[sorted.length - 2] : null;
+  const axes = (latest.criteria || []).map((c) => c.name);
+  const labels = sorted.map((e) => e.period || fmtDate(e.evaluated_at));
+  let radar = "";
+  if (axes.length >= 3) {
+    const mapBy = (ev) => { const m = {}; (ev.criteria || []).forEach((c) => m[c.name] = c.score); return m; };
+    const lm = mapBy(latest); const series = [{ color: "var(--accent)", values: axes.map((a) => (lm[a] ?? 0) / 2) }];
+    if (prev) { const pm = mapBy(prev); series.push({ color: "var(--green)", values: axes.map((a) => a in pm ? pm[a] / 2 : null) }); }
+    radar = `<div class="ev-card"><div class="ev-h">Competências — ${esc(latest.period || fmtDate(latest.evaluated_at))}</div>${radarChart(axes, series)}
+      <div class="chart-legend"><span class="leg"><i style="background:var(--accent)"></i>Atual</span>${prev ? `<span class="leg"><i style="background:var(--green)"></i>Anterior</span>` : ""}</div></div>`;
+  }
+  const overall = `<div class="ev-card"><div class="ev-h">Evolução da nota geral</div>${multiLine(labels, [{ name: "Nota geral", color: "var(--accent)", values: sorted.map((e) => (e.overall_score ?? 0) / 100), fmt: (v) => Math.round(v * 100) + "%" }])}</div>`;
+  let comp = "";
+  if (axes.length) {
+    const pal = ["#1a1a1a", "#1D9E75", "#c0392b", "#2e6cb8", "#b8862e", "#7d4fb8"];
+    const series = axes.slice(0, 6).map((a, i) => ({ name: a, color: pal[i % pal.length], values: sorted.map((e) => { const cr = (e.criteria || []).find((x) => x.name === a); return cr ? cr.score / 2 : null; }), fmt: (v) => EVAL_SHORT[Math.round(v * 2)] }));
+    comp = `<div class="ev-card"><div class="ev-h">Evolução por competência</div>${multiLine(labels, series)}
+      <div class="chart-legend">${series.map((s) => `<span class="leg"><i style="background:${s.color}"></i>${esc(s.name.length > 16 ? s.name.slice(0, 15) + "…" : s.name)}</span>`).join("")}</div></div>`;
+  }
+  return `<div class="ev-panel">${radar}${overall}${comp}</div>`;
 }
 const EVAL_LEVELS = [["0", "Não atende"], ["1", "Atende parcialmente"], ["2", "Atende completamente"]];
 const EVAL_LABEL = { 0: "Não atende", 1: "Atende parcialmente", 2: "Atende completamente" };
