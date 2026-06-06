@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.5.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -525,17 +525,25 @@ function switchTab(tab) {
 /* ---------- encontros ---------- */
 const STATUS_MEET = ["a_agendar", "agendado", "realizado", "cancelado", "remarcado"];
 const MEET_LABEL = { a_agendar: "a agendar", agendado: "agendado", realizado: "realizado", cancelado: "cancelado", remarcado: "remarcado" };
+const fmtSize = (n) => !n ? "" : n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
+
 async function renderMeetings() {
   const c = $("#pd-content");
-  const { data } = await supa.from("meetings").select("*").eq("program_id", state.currentProgram.id)
-    .order("seq", { ascending: true, nullsFirst: false }).order("scheduled_at", { ascending: true, nullsFirst: false });
+  const [{ data }, { data: atts }] = await Promise.all([
+    supa.from("meetings").select("*").eq("program_id", state.currentProgram.id)
+      .order("seq", { ascending: true, nullsFirst: false }).order("scheduled_at", { ascending: true, nullsFirst: false }),
+    supa.from("attachments").select("meeting_id").eq("program_id", state.currentProgram.id),
+  ]);
+  const attCount = {}; (atts || []).forEach((a) => attCount[a.meeting_id] = (attCount[a.meeting_id] || 0) + 1);
   const total = (data || []).length, done = (data || []).filter((m) => m.status === "realizado").length;
   c.innerHTML = sechdr(null, "Encontros & observações", "add-meet", "+ Encontro") +
     (total ? `<div class="muted" style="font-size:12px;margin:-4px 0 10px">${done} de ${total} realizados</div>` + data.map((m) => `
       <div class="li" style="align-items:flex-start">
         <div class="linfo"><div class="lname">${esc(m.topic || "Encontro")} <span class="muted" style="font-weight:400">· ${m.scheduled_at ? fmtDateTime(m.scheduled_at) : "sem agenda"}</span></div>
+          ${m.key_points ? `<div class="lsub" style="white-space:pre-wrap;overflow:visible"><strong>Pontos:</strong> ${esc(m.key_points)}</div>` : ""}
+          ${m.action_items ? `<div class="lsub" style="white-space:pre-wrap;overflow:visible"><strong>Próximos passos:</strong> ${esc(m.action_items)}</div>` : ""}
           ${m.notes ? `<div class="lsub" style="white-space:pre-wrap;overflow:visible">${esc(m.notes)}</div>` : ""}
-          <div class="lsub">${m.duration_min || 60} min</div></div>
+          <div class="lsub">${m.duration_min || 60} min${attCount[m.id] ? ` · ${attCount[m.id]} anexo(s)` : ""}</div></div>
         <div class="lright" style="align-items:flex-end;flex-direction:column">${badge(m.status)}
           <div class="row" style="gap:2px">
             ${m.status === "a_agendar" ? `<button class="bicon" data-edit="${m.id}" title="Agendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></button>` : `<button class="bicon" data-edit="${m.id}">${ICON.edit}</button>`}
@@ -545,24 +553,68 @@ async function renderMeetings() {
   $$("[data-edit]", c).forEach((b) => b.onclick = () => meetingForm((data || []).find((m) => m.id === b.dataset.edit)));
   $$("[data-del]", c).forEach((b) => b.onclick = async () => { if (confirm("Excluir este encontro?")) { await remove("meetings", b.dataset.del); toast("Encontro excluído."); renderMeetings(); } });
 }
+
+/* ---------- anexos ---------- */
+async function uploadMeetingFile(file, meetingId) {
+  const safe = file.name.replace(/[^\w.\-]/g, "_");
+  const path = `${state.companyId}/${meetingId}/${Date.now()}_${safe}`;
+  const { error } = await supa.storage.from("attachments").upload(path, file);
+  if (error) { toast("Falha no upload: " + error.message); return; }
+  const { error: e2 } = await supa.from("attachments").insert({ user_id: state.user.id, company_id: state.companyId || null, meeting_id: meetingId, program_id: state.currentProgram?.id || null, file_name: file.name, file_path: path, mime_type: file.type, size_bytes: file.size });
+  if (e2) toast("Falha ao registrar anexo: " + e2.message);
+}
+async function openAttachment(path) {
+  const { data, error } = await supa.storage.from("attachments").createSignedUrl(path, 120);
+  if (error) { toast("Não foi possível abrir o anexo."); return; }
+  window.open(data.signedUrl, "_blank");
+}
+async function renderMeetingAttachments(meetingId) {
+  const wrap = $("#att-list"); if (!wrap) return;
+  const { data } = await supa.from("attachments").select("*").eq("meeting_id", meetingId).order("created_at");
+  wrap.innerHTML = (data || []).length ? (data || []).map((a) => `
+    <div class="att-row">
+      <span class="att-name" data-open="${esc(a.file_path)}" title="Abrir">${esc(a.file_name || "arquivo")}</span>
+      <span class="att-size">${fmtSize(a.size_bytes)}</span>
+      <button class="bicon danger" data-adel="${a.id}" data-apath="${esc(a.file_path)}">${ICON.trash}</button>
+    </div>`).join("") : `<div class="muted" style="font-size:12px">Nenhum anexo ainda.</div>`;
+  $$("[data-open]", wrap).forEach((el) => el.onclick = () => openAttachment(el.dataset.open));
+  $$("[data-adel]", wrap).forEach((b) => b.onclick = async () => { if (confirm("Excluir este anexo?")) { await supa.storage.from("attachments").remove([b.dataset.apath]); await supa.from("attachments").delete().eq("id", b.dataset.adel); renderMeetingAttachments(meetingId); } });
+}
+
 function meetingForm(m = {}) {
   const dtVal = m.scheduled_at ? new Date(m.scheduled_at).toISOString().slice(0, 16) : "";
   const curStatus = m.status || (m.id ? "agendado" : "a_agendar");
   openModal({
-    title: m.id ? "Encontro — agenda e anotações" : "Novo encontro",
+    title: m.id ? "Encontro — agenda, pontos e anexos" : "Novo encontro", wide: true,
     body: `<div class="grid-2">${field("Tema", `<input id="f-topic" value="${esc(m.topic || "")}">`)}
         ${field("Status", `<select id="f-status">${STATUS_MEET.map((s) => `<option value="${s}" ${s === curStatus ? "selected" : ""}>${MEET_LABEL[s]}</option>`).join("")}</select>`)}</div>
       <div class="grid-2">${field("Data e hora (agenda)", `<input id="f-dt" type="datetime-local" value="${dtVal}">`)}
         ${field("Duração (min)", `<input id="f-dur" type="number" value="${esc(m.duration_min || 60)}">`)}</div>
-      ${field("Anotações do encontro", `<textarea id="f-notes" style="min-height:120px" placeholder="Registre aqui o que foi discutido após a reunião.">${esc(m.notes || "")}</textarea>`)}`,
+      ${field("Pontos relevantes", `<textarea id="f-key" style="min-height:90px" placeholder="O que foi discutido, decisões, insights...">${esc(m.key_points || "")}</textarea>`)}
+      ${field("Compromissos & próximos passos", `<textarea id="f-action" style="min-height:70px" placeholder="Tarefas e combinados para o próximo encontro.">${esc(m.action_items || "")}</textarea>`)}
+      ${field("Observações gerais", `<textarea id="f-notes" style="min-height:60px">${esc(m.notes || "")}</textarea>`)}
+      ${m.id ? `<div class="divider"></div><label class="fl">Anexos (PDF, imagens...)</label>
+        <input type="file" id="att-file" multiple style="font-size:13px;margin-bottom:8px">
+        <div id="att-list"></div>` : `<div class="muted" style="font-size:12px;margin-top:8px">Salve o encontro para poder anexar arquivos.</div>`}`,
     onSave: async () => {
       const dt = val("f-dt");
       let status = val("f-status");
-      if (dt && status === "a_agendar") status = "agendado"; // ao definir agenda, deixa de ser tarefa pendente
-      await save("meetings", { program_id: state.currentProgram.id, scheduled_at: dt ? new Date(dt).toISOString() : null, duration_min: numOrNull(val("f-dur")) || 60, topic: val("f-topic"), notes: val("f-notes"), status, seq: m.seq ?? null }, m.id);
+      if (dt && status === "a_agendar") status = "agendado";
+      await save("meetings", { program_id: state.currentProgram.id, scheduled_at: dt ? new Date(dt).toISOString() : null, duration_min: numOrNull(val("f-dur")) || 60, topic: val("f-topic"), key_points: val("f-key"), action_items: val("f-action"), notes: val("f-notes"), status, seq: m.seq ?? null }, m.id);
       toast("Encontro salvo."); renderMeetings();
     },
   });
+  if (m.id) {
+    renderMeetingAttachments(m.id);
+    $("#att-file").onchange = async (e) => {
+      const files = [...e.target.files]; if (!files.length) return;
+      toast("Enviando anexo(s)…");
+      for (const f of files) await uploadMeetingFile(f, m.id);
+      e.target.value = "";
+      renderMeetingAttachments(m.id);
+      toast("Anexo(s) enviado(s).");
+    };
+  }
 }
 
 /* ---------- avaliações no programa ---------- */
