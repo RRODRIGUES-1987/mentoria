@@ -247,3 +247,12 @@ button{font-family:inherit;cursor:pointer}
 .bar-lbl{font-size:10px;fill:var(--text2)}
 .bar-g rect[fill^="var"]{transition:opacity .12s}
 .bar-g:hover rect[fill^="var"]{opacity:.78}
+
+/* ── painel de avaliações ── */
+.ev-panel{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-bottom:16px}
+.ev-card{border:1px solid var(--border);border-radius:var(--radius);padding:12px;overflow-x:auto}
+.ev-h{font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px}
+.radar-lbl{font-size:9px;fill:var(--text2)}
+.chart-legend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:8px;font-size:11px;color:var(--text2)}
+.chart-legend .leg{display:flex;align-items:center;gap:5px}
+.chart-legend .leg i{width:9px;height:9px;border-radius:2px;display:inline-block}
