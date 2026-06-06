@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.8.0";
+const APP_VERSION = "1.9.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -137,7 +137,7 @@ async function save(table, payload, id) {
 async function remove(table, id) { const { error } = await supa.from(table).delete().eq("id", id); if (error) { toast("Erro ao excluir."); throw error; } }
 
 /* ---------- navegação ---------- */
-const TITLES = { contacts: "Contatos", programs: "Mentorias", evaluations: "Avaliações", billings: "Faturamento", admin: "Admin" };
+const TITLES = { contacts: "Contatos", programs: "Mentorias", evaluations: "Avaliações", billings: "Financeiro", admin: "Admin" };
 $$(".navitem[data-view]").forEach((b) => b.onclick = () => showView(b.dataset.view));
 function showView(name) {
   if (name === "admin" && !state.isSuperAdmin) return;
@@ -455,6 +455,98 @@ function mentorshipSetupForm(c) {
   updatePreview();
 }
 
+/* ---------- renovar mentoria (continua os encontros) ---------- */
+function renewMentorshipForm(p) {
+  const today = todayISO();
+  const baseStart = (p.end_date && p.end_date >= today) ? p.end_date : today;
+  openModal({
+    title: "Renovar mentoria", wide: true, saveLabel: "Renovar",
+    body: `<p class="muted" style="font-size:12px;margin-bottom:12px">Nova etapa de <strong>${esc(p.title)}</strong>, continuando a partir de ${fmtDate(baseStart)}. Os novos encontros seguem a numeração atual.</p>
+      <div class="grid-3">${field("Início da renovação", `<input id="f-start" type="date" value="${baseStart}">`)}
+        ${field("Prazo (meses)", `<input id="f-months" type="number" min="1" value="${p.contract_months || 6}">`)}
+        ${field("Frequência", `<select id="f-freq">${FREQ.map((f) => `<option ${f === p.meeting_frequency ? "selected" : ""}>${f}</option>`).join("")}</select>`)}</div>
+      <label class="ckline"><input type="checkbox" id="f-gen-meet" checked> Gerar os novos encontros</label>
+      <div class="muted" id="meet-preview" style="font-size:12px;margin:-2px 0 8px"></div>
+      <div class="divider"></div>
+      <label class="ckline"><input type="checkbox" id="f-billed" ${p.is_billed ? "checked" : ""}> Gerar novas faturas</label>
+      <div id="billing-box" style="display:${p.is_billed ? "" : "none"}">
+        <div class="grid-3">${field("Valor total (R$)", `<input id="f-total" type="number" step="0.01" placeholder="0,00">`)}
+          ${field("Nº de parcelas", `<input id="f-inst" type="number" value="6">`)}
+          ${field("Forma de pagamento", `<input id="f-pay" value="${esc(p.payment_method || "")}">`)}</div>
+      </div>`,
+    onSave: async () => {
+      const months = numOrNull(val("f-months")) || 6;
+      const freq = val("f-freq");
+      const start = val("f-start") || today;
+      const newEnd = addMonths(start, months);
+      const billed = $("#f-billed").checked;
+      const total = numOrNull(val("f-total")) || 0;
+      const inst = numOrNull(val("f-inst")) || 0;
+      await save("programs", { end_date: newEnd, status: "ativo", contract_months: (p.contract_months || 0) + months, meeting_frequency: freq, is_billed: billed || p.is_billed, payment_method: val("f-pay") || p.payment_method }, p.id);
+      const { data: mx } = await supa.from("meetings").select("seq").eq("program_id", p.id).order("seq", { ascending: false, nullsFirst: false }).limit(1);
+      let seq = (mx && mx[0] && mx[0].seq) ? mx[0].seq : 0;
+      if ($("#f-gen-meet").checked) {
+        const n = meetingCount(freq, months); const rows = [];
+        for (let i = 1; i <= n; i++) rows.push({ user_id: state.user.id, company_id: state.companyId || null, program_id: p.id, topic: `Encontro ${seq + i}`, status: "a_agendar", seq: seq + i, duration_min: 60, scheduled_at: null });
+        const { error } = await supa.from("meetings").insert(rows); if (error) toast("Encontros: " + error.message);
+      }
+      if (billed && inst > 0 && total > 0) {
+        const base = Math.floor((total / inst) * 100) / 100; const rows = [];
+        for (let i = 0; i < inst; i++) { const amount = i === inst - 1 ? Math.round((total - base * (inst - 1)) * 100) / 100 : base; rows.push({ user_id: state.user.id, company_id: state.companyId || null, program_id: p.id, description: `Renovação — Parcela ${i + 1}/${inst}`, amount, due_date: addMonths(start, i), status: "pendente" }); }
+        const { error } = await supa.from("billings").insert(rows); if (error) toast("Faturas: " + error.message);
+      }
+      toast("Mentoria renovada!"); openProgramDetail(p.id, "encontros", state.detailBack);
+    },
+  });
+  const updatePreview = () => { const n = meetingCount(val("f-freq"), numOrNull(val("f-months"))); $("#meet-preview").textContent = $("#f-gen-meet").checked ? `Serão criados ${n} novos encontros.` : ""; };
+  $("#f-billed").onchange = (e) => $("#billing-box").style.display = e.target.checked ? "" : "none";
+  ["f-months", "f-freq"].forEach((id) => $("#" + id).oninput = updatePreview);
+  $("#f-gen-meet").onchange = updatePreview;
+  updatePreview();
+}
+
+/* ---------- importar histórico (Word .docx) ---------- */
+function importHistoryForm(p) {
+  let pickedFile = null;
+  openModal({
+    title: "Importar histórico (Word)", wide: true, saveLabel: "Importar",
+    body: `<p class="muted" style="font-size:12px;margin-bottom:12px">Envie um arquivo <strong>.docx</strong> (ou cole o texto). O conteúdo entra como um encontro de histórico realizado, e o arquivo original fica anexado.</p>
+      <div class="grid-2">${field("Título", `<input id="f-title" value="Histórico importado">`)}
+        ${field("Data (opcional)", `<input id="f-date" type="date">`)}</div>
+      ${field("Arquivo Word (.docx)", `<input type="file" id="f-doc" accept=".docx" style="font-size:13px">`)}
+      <div class="muted" id="imp-status" style="font-size:12px;margin:4px 0"></div>
+      ${field("Conteúdo", `<textarea id="f-text" style="min-height:200px" placeholder="O texto extraído do Word aparece aqui. Você pode revisar antes de importar."></textarea>`)}`,
+    onSave: async () => {
+      const text = val("f-text");
+      if (!text && !pickedFile) { toast("Envie um arquivo ou cole o texto."); throw 0; }
+      const dt = val("f-date");
+      const { data: mx } = await supa.from("meetings").select("seq").eq("program_id", p.id).order("seq", { ascending: false, nullsFirst: false }).limit(1);
+      const seq = ((mx && mx[0] && mx[0].seq) ? mx[0].seq : 0) + 1;
+      const { data: meet, error } = await supa.from("meetings").insert({
+        user_id: state.user.id, company_id: state.companyId || null, program_id: p.id,
+        topic: val("f-title") || "Histórico importado", status: "realizado", seq,
+        scheduled_at: dt ? new Date(dt + "T12:00:00").toISOString() : null, duration_min: 60,
+        key_points: text || null, notes: "Importado de documento Word.",
+      }).select().single();
+      if (error) { toast(error.message); throw 0; }
+      if (pickedFile) await uploadMeetingFile(pickedFile, meet.id);
+      toast("Histórico importado!"); renderMeetings();
+    },
+  });
+  $("#f-doc").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    pickedFile = f;
+    const st = $("#imp-status"); st.textContent = "Lendo o documento…";
+    try {
+      if (!window.mammoth) { st.textContent = "Biblioteca de leitura não carregou — cole o texto manualmente."; return; }
+      const buf = await f.arrayBuffer();
+      const res = await window.mammoth.extractRawText({ arrayBuffer: buf });
+      $("#f-text").value = (res.value || "").trim();
+      st.textContent = `“${f.name}” lido. Revise o conteúdo abaixo.`;
+    } catch (err) { st.textContent = "Não consegui ler o arquivo. Cole o texto manualmente."; }
+  };
+}
+
 /* ---------- formulário do contato ---------- */
 function contactForm(c = {}, after) {
   const done = after || (async () => { await loadContacts(); renderContacts(); });
@@ -586,7 +678,8 @@ async function openProgramDetail(id, section = "encontros", back) {
   v.innerHTML = `
     <button class="back-link" id="pd-back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>Voltar</button>
     <div class="sechdr"><div><div class="eyebrow">${p.contacts?.name ? `<span id="pd-contact" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px">${esc(p.contacts.name)}</span> · ` : ""}${esc(SECT_LABEL[section] || "")}</div>
-      <span class="sectitle">${esc(p.title)}</span></div>${badge(p.status)}</div>
+      <span class="sectitle">${esc(p.title)}</span></div>
+      <div class="row" style="gap:6px;align-items:center">${badge(p.status)}<button class="btn btn-sm" id="pd-renew">Renovar</button></div></div>
     <div class="infocard"><div class="infogrid">
       <div><div class="lbl">Objetivo</div><div class="v">${esc(p.objective || "—")}</div></div>
       <div><div class="lbl">Período</div><div class="v">${fmtDate(p.start_date)} → ${fmtDate(p.end_date)}</div></div>
@@ -596,6 +689,7 @@ async function openProgramDetail(id, section = "encontros", back) {
     </div>${p.description ? `<div class="divider"></div><div class="muted">${esc(p.description)}</div>` : ""}</div>
     <div id="pd-content"></div>`;
   $("#pd-back").onclick = () => state.detailBack();
+  $("#pd-renew").onclick = () => renewMentorshipForm(p);
   const pc = $("#pd-contact"); if (pc && p.contact_id) pc.onclick = () => openContactDetail(p.contact_id);
   ({ encontros: renderMeetings, avaliacoes: renderProgramEvals, faturamento: renderProgramBillings })[section]?.();
 }
@@ -614,7 +708,8 @@ async function renderMeetings() {
   ]);
   const attCount = {}; (atts || []).forEach((a) => attCount[a.meeting_id] = (attCount[a.meeting_id] || 0) + 1);
   const total = (data || []).length, done = (data || []).filter((m) => m.status === "realizado").length;
-  c.innerHTML = sechdr(null, "Encontros & observações", "add-meet", "+ Encontro") +
+  c.innerHTML = `<div class="sechdr"><div><span class="sectitle">Encontros & observações</span></div>
+      <div class="row" style="gap:6px"><button class="btn" id="import-hist">Importar histórico</button><button class="btn btn-p" id="add-meet">+ Encontro</button></div></div>` +
     (total ? `<div class="muted" style="font-size:12px;margin:-4px 0 10px">${done} de ${total} realizados</div>` + data.map((m) => `
       <div class="li" style="align-items:flex-start">
         <div class="linfo"><div class="lname">${esc(m.topic || "Encontro")} <span class="muted" style="font-weight:400">· ${m.scheduled_at ? fmtDateTime(m.scheduled_at) : "sem agenda"}</span></div>
@@ -628,6 +723,7 @@ async function renderMeetings() {
             <button class="bicon danger" data-del="${m.id}">${ICON.trash}</button></div></div>
       </div>`).join("") : emptyState("Nenhum encontro registrado."));
   $("#add-meet").onclick = () => meetingForm();
+  $("#import-hist").onclick = () => importHistoryForm(state.currentProgram);
   $$("[data-edit]", c).forEach((b) => b.onclick = () => meetingForm((data || []).find((m) => m.id === b.dataset.edit)));
   $$("[data-del]", c).forEach((b) => b.onclick = async () => { if (confirm("Excluir este encontro?")) { await remove("meetings", b.dataset.del); toast("Encontro excluído."); renderMeetings(); } });
 }
@@ -786,22 +882,54 @@ function bindBillings(root, rows, refresh) {
   $$("[data-edit]", root).forEach((b) => b.onclick = () => billingForm(rows.find((x) => x.id === b.dataset.edit), refresh));
   $$("[data-del]", root).forEach((b) => b.onclick = async () => { if (confirm("Excluir esta fatura?")) { await remove("billings", b.dataset.del); toast("Fatura excluída."); refresh(); } });
 }
+let finTab = "receber";
 async function renderBillings() {
   const v = $("#view-billings");
   await loadPrograms();
-  const { data } = await supa.from("billings").select("*, programs(title)").order("due_date", { ascending: true });
+  const { data } = await supa.from("billings").select("*, programs(title, contacts(name))").order("due_date", { ascending: true });
   const rows = data || [];
   const received = rows.filter((b) => b.status === "pago").reduce((s, b) => s + Number(b.amount), 0);
   const pending = rows.filter((b) => b.status !== "pago" && b.status !== "cancelado").reduce((s, b) => s + Number(b.amount), 0);
-  v.innerHTML = sechdr("Financeiro", "Faturamento", "add-bill-g", "+ Nova fatura") +
+  v.innerHTML = sechdr("Financeiro", "Financeiro", "add-bill-g", "+ Nova fatura") +
     `<div class="metrics" style="grid-template-columns:repeat(3,1fr)">
       <div class="metric"><div class="mlabel">Recebido</div><div class="mval">${money(received)}</div></div>
       <div class="metric"><div class="mlabel">Em aberto</div><div class="mval">${money(pending)}</div></div>
       <div class="metric"><div class="mlabel">Faturas</div><div class="mval">${rows.length}</div></div>
-    </div>` +
-    (rows.length ? rows.map((b) => billingLi(b, true)).join("") : emptyState("Nenhuma fatura registrada."));
+    </div>
+    <div class="tabs"><button class="tab ${finTab === "receber" ? "active" : ""}" data-ftab="receber">Contas a receber</button>
+      <button class="tab ${finTab === "faturas" ? "active" : ""}" data-ftab="faturas">Faturas</button></div>
+    <div id="fin-content"></div>`;
   $("#add-bill-g").onclick = () => billingForm({}, renderBillings);
-  bindBillings(v, rows, renderBillings);
+  $$(".tab", v).forEach((b) => b.onclick = () => { finTab = b.dataset.ftab; renderBillings(); });
+  const fc = $("#fin-content");
+  if (finTab === "faturas") {
+    fc.innerHTML = rows.length ? rows.map((b) => billingLi(b, true)).join("") : emptyState("Nenhuma fatura registrada.");
+    bindBillings(fc, rows, renderBillings);
+  } else {
+    fc.innerHTML = renderReceber(rows);
+  }
+}
+function renderReceber(rows) {
+  const today = todayISO();
+  const byDay = {};
+  rows.forEach((b) => { if (b.status === "cancelado") return; const d = b.due_date || "Sem vencimento"; (byDay[d] = byDay[d] || []).push(b); });
+  const days = Object.keys(byDay).sort();
+  if (!days.length) return emptyState("Nada a receber.");
+  return days.map((d) => {
+    const items = byDay[d];
+    const total = items.reduce((s, b) => s + Number(b.amount), 0);
+    const paidCount = items.filter((b) => b.status === "pago").length;
+    const allPaid = paidCount === items.length;
+    const overdue = !allPaid && d !== "Sem vencimento" && d < today;
+    const stat = allPaid ? "pago" : overdue ? "atrasado" : "pendente";
+    const label = allPaid ? "recebido" : overdue ? "atrasado" : "a receber";
+    const names = [...new Set(items.map((b) => b.programs?.contacts?.name || b.programs?.title || b.description).filter(Boolean))].slice(0, 3).join(", ");
+    return `<div class="li">
+      <div class="linfo"><div class="lname">${d === "Sem vencimento" ? d : fmtDate(d)}</div>
+        <div class="lsub">${items.length} fatura(s)${names ? " · " + esc(names) : ""}</div></div>
+      <div class="lright"><span class="lval">${money(total)}</span><span class="bdg ${BADGE[stat]}">${label}</span></div>
+    </div>`;
+  }).join("");
 }
 function billingForm(b = {}, refresh) {
   const done = refresh || (state.currentProgram ? renderProgramBillings : renderBillings);
