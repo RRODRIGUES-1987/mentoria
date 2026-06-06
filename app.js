@@ -1,5 +1,5 @@
 /* =====================================================================
-   Mentoria App — Lógica (estilo VERUS)
+   Mentoria App — Lógica (estilo VERUS) 
    ===================================================================== */
 const cfg = window.SUPABASE_CONFIG || {};
 if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
