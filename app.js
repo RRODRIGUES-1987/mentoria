@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "2.0.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -798,9 +798,9 @@ async function renderProgramEvals() {
   c.innerHTML = sechdr(null, "Avaliações de performance", "add-eval", "+ Avaliação") +
     ((data || []).length ? data.map((ev) => `
       <div class="li" style="align-items:flex-start">
-        <div class="av av1">${ev.overall_score ?? "—"}</div>
+        <div class="av av1">${ev.overall_score != null ? ev.overall_score + "%" : "—"}</div>
         <div class="linfo"><div class="lname">${esc(ev.period || "Avaliação")} <span class="muted" style="font-weight:400">· ${fmtDate(ev.evaluated_at)}</span></div>
-          ${(ev.criteria || []).length ? `<div class="lsub" style="overflow:visible">${ev.criteria.map((cr) => `${esc(cr.name)}: <strong>${esc(cr.score)}</strong>`).join(" · ")}</div>` : ""}
+          ${(ev.criteria || []).length ? `<div class="lsub" style="overflow:visible">${ev.criteria.map((cr) => `${esc(cr.name)}: <strong>${esc(EVAL_LABEL[cr.score] ?? cr.score)}</strong>`).join(" · ")}</div>` : ""}
           ${ev.comments ? `<div class="lsub" style="white-space:pre-wrap;overflow:visible;margin-top:4px">${esc(ev.comments)}</div>` : ""}</div>
         <div class="lright"><button class="bicon" data-edit="${ev.id}">${ICON.edit}</button>
           <button class="bicon danger" data-del="${ev.id}">${ICON.trash}</button></div>
@@ -809,27 +809,38 @@ async function renderProgramEvals() {
   $$("[data-edit]", c).forEach((b) => b.onclick = () => evaluationForm((data || []).find((e) => e.id === b.dataset.edit)));
   $$("[data-del]", c).forEach((b) => b.onclick = async () => { if (confirm("Excluir esta avaliação?")) { await remove("evaluations", b.dataset.del); toast("Avaliação excluída."); renderProgramEvals(); } });
 }
+const EVAL_LEVELS = [["0", "Não atende"], ["1", "Atende parcialmente"], ["2", "Atende completamente"]];
+const EVAL_LABEL = { 0: "Não atende", 1: "Atende parcialmente", 2: "Atende completamente" };
 function evaluationForm(ev = {}) {
-  const crits = ev.criteria && ev.criteria.length ? ev.criteria : [{ name: "", score: "" }];
-  const critRow = (cr = {}) => `<div class="crit-row"><input class="crit-name" placeholder="Critério" value="${esc(cr.name || "")}">
-    <input class="crit-score" type="number" step="0.5" min="0" max="10" placeholder="0-10" value="${esc(cr.score ?? "")}">
+  const crits = ev.criteria && ev.criteria.length ? ev.criteria : [{ name: "", score: 2 }];
+  const critRow = (cr = {}) => `<div class="crit-row"><input class="crit-name" placeholder="Pergunta" value="${esc(cr.name || "")}">
+    <select class="crit-score">${EVAL_LEVELS.map(([v, l]) => `<option value="${v}" ${String(cr.score) === v ? "selected" : ""}>${l}</option>`).join("")}</select>
     <button class="bicon danger crit-del" type="button">${ICON.trash}</button></div>`;
   openModal({
     title: ev.id ? "Editar avaliação" : "Nova avaliação", wide: true,
-    body: `<div class="grid-3">${field("Período", `<input id="f-period" value="${esc(ev.period || "")}" placeholder="Mês 1">`)}
-        ${field("Data", `<input id="f-date" type="date" value="${esc(ev.evaluated_at || todayISO())}">`)}
-        ${field("Nota geral (0-10)", `<input id="f-overall" type="number" step="0.1" min="0" max="10" value="${esc(ev.overall_score ?? "")}">`)}</div>
-      ${field("Critérios", `<div id="crit-list">${crits.map(critRow).join("")}</div><button class="btn btn-sm" type="button" id="crit-add" style="margin-top:6px">+ Critério</button>`)}
+    body: `<div class="grid-2">${field("Período / título", `<input id="f-period" value="${esc(ev.period || "")}" placeholder="Ex.: Avaliação trimestral">`)}
+        ${field("Data", `<input id="f-date" type="date" value="${esc(ev.evaluated_at || todayISO())}">`)}</div>
+      ${field("Perguntas e notas", `<div id="crit-list">${crits.map(critRow).join("")}</div><button class="btn btn-sm" type="button" id="crit-add" style="margin-top:6px">+ Pergunta</button>`)}
+      <div class="muted" id="eval-score" style="font-size:12px;margin:6px 0 2px"></div>
       ${field("Comentários", `<textarea id="f-comments" style="min-height:90px">${esc(ev.comments || "")}</textarea>`)}`,
     onSave: async () => {
-      const criteria = $$(".crit-row").map((r) => ({ name: $(".crit-name", r).value.trim(), score: numOrNull($(".crit-score", r).value) })).filter((cr) => cr.name);
-      await save("evaluations", { program_id: state.currentProgram.id, period: val("f-period"), evaluated_at: val("f-date") || todayISO(), overall_score: numOrNull(val("f-overall")), criteria, comments: val("f-comments") }, ev.id);
+      const criteria = $$(".crit-row").map((r) => ({ name: $(".crit-name", r).value.trim(), score: +$(".crit-score", r).value })).filter((cr) => cr.name);
+      if (!criteria.length) { toast("Adicione ao menos uma pergunta."); throw 0; }
+      const overall = Math.round(criteria.reduce((s, c) => s + c.score, 0) / (2 * criteria.length) * 100);
+      await save("evaluations", { program_id: state.currentProgram.id, period: val("f-period"), evaluated_at: val("f-date") || todayISO(), overall_score: overall, criteria, comments: val("f-comments") }, ev.id);
       toast("Avaliação salva."); renderProgramEvals();
     },
   });
-  const bind = () => $$(".crit-del").forEach((b) => b.onclick = () => { if ($$(".crit-row").length > 1) b.closest(".crit-row").remove(); });
-  bind();
-  $("#crit-add").onclick = () => { $("#crit-list").insertAdjacentHTML("beforeend", critRow()); bind(); };
+  const updateScore = () => {
+    const list = $$(".crit-row").map((r) => +$(".crit-score", r).value);
+    const named = $$(".crit-row").filter((r) => $(".crit-name", r).value.trim()).length;
+    const sum = list.reduce((s, v) => s + v, 0);
+    const pct = named ? Math.round(sum / (2 * named) * 100) : 0;
+    $("#eval-score").textContent = named ? `Aproveitamento: ${pct}% (${named} pergunta(s))` : "";
+  };
+  const bind = () => { $$(".crit-del").forEach((b) => b.onclick = () => { if ($$(".crit-row").length > 1) { b.closest(".crit-row").remove(); updateScore(); } }); $$(".crit-score").forEach((s) => s.onchange = updateScore); $$(".crit-name").forEach((n) => n.oninput = updateScore); };
+  bind(); updateScore();
+  $("#crit-add").onclick = () => { $("#crit-list").insertAdjacentHTML("beforeend", critRow()); bind(); updateScore(); };
 }
 
 /* ---------- faturas no programa ---------- */
@@ -911,25 +922,52 @@ async function renderBillings() {
 }
 function renderReceber(rows) {
   const today = todayISO();
-  const byDay = {};
-  rows.forEach((b) => { if (b.status === "cancelado") return; const d = b.due_date || "Sem vencimento"; (byDay[d] = byDay[d] || []).push(b); });
-  const days = Object.keys(byDay).sort();
-  if (!days.length) return emptyState("Nada a receber.");
-  return days.map((d) => {
-    const items = byDay[d];
-    const total = items.reduce((s, b) => s + Number(b.amount), 0);
-    const paidCount = items.filter((b) => b.status === "pago").length;
-    const allPaid = paidCount === items.length;
-    const overdue = !allPaid && d !== "Sem vencimento" && d < today;
-    const stat = allPaid ? "pago" : overdue ? "atrasado" : "pendente";
-    const label = allPaid ? "recebido" : overdue ? "atrasado" : "a receber";
-    const names = [...new Set(items.map((b) => b.programs?.contacts?.name || b.programs?.title || b.description).filter(Boolean))].slice(0, 3).join(", ");
-    return `<div class="li">
-      <div class="linfo"><div class="lname">${d === "Sem vencimento" ? d : fmtDate(d)}</div>
-        <div class="lsub">${items.length} fatura(s)${names ? " · " + esc(names) : ""}</div></div>
-      <div class="lright"><span class="lval">${money(total)}</span><span class="bdg ${BADGE[stat]}">${label}</span></div>
-    </div>`;
+  const live = rows.filter((b) => b.status !== "cancelado" && b.due_date);
+  if (!live.length) return emptyState("Nada a receber.");
+  const months = {};
+  live.forEach((b) => {
+    const key = b.due_date.slice(0, 7);
+    const m = months[key] = months[key] || { recebido: 0, receber: 0, atrasado: 0, count: 0 };
+    m.count++;
+    if (b.status === "pago") m.recebido += Number(b.amount);
+    else if (b.due_date < today) m.atrasado += Number(b.amount);
+    else m.receber += Number(b.amount);
+  });
+  const keys = Object.keys(months).sort();
+  const totals = keys.map((k) => months[k].recebido + months[k].receber + months[k].atrasado);
+  const max = Math.max(...totals, 1);
+  const slot = 66, barW = 38, H = 230, base = H - 40, top = 26, usable = base - top;
+  const W = Math.max(keys.length * slot, 280);
+  const mName = (k) => { const [y, m] = k.split("-"); return ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][+m - 1] + "/" + y.slice(2); };
+  const moneyK = (v) => v >= 1000 ? "R$ " + (v / 1000).toFixed(v % 1000 ? 1 : 0).replace(".", ",") + "k" : money(v);
+  const segs = (m, x) => {
+    let yb = base; const parts = [];
+    const stack = [["atrasado", "var(--red)", m.atrasado], ["receber", "var(--accent)", m.receber], ["recebido", "var(--green)", m.recebido]];
+    stack.forEach(([, color, v]) => { if (v <= 0) return; const h = (v / max) * usable; yb -= h; parts.push(`<rect x="${x}" y="${yb.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}" rx="3" fill="${color}"></rect>`); });
+    return parts.join("");
+  };
+  const totReceber = keys.reduce((s, k) => s + months[k].receber, 0);
+  const totAtraso = keys.reduce((s, k) => s + months[k].atrasado, 0);
+  const totReceb = keys.reduce((s, k) => s + months[k].recebido, 0);
+  const bars = keys.map((k, i) => {
+    const m = months[k]; const x = i * slot + (slot - barW) / 2; const tot = totals[i];
+    const tip = `${mName(k)} — ${m.count} fatura(s)\nRecebido: ${money(m.recebido)}\nA receber: ${money(m.receber)}\nAtrasado: ${money(m.atrasado)}`;
+    return `<g class="bar-g"><title>${esc(tip)}</title>
+      <rect x="${i * slot}" y="${top}" width="${slot}" height="${base - top}" fill="transparent"></rect>
+      ${segs(m, x)}
+      <text x="${x + barW / 2}" y="${base - (tot / max) * usable - 6}" text-anchor="middle" class="bar-val">${moneyK(tot)}</text>
+      <text x="${x + barW / 2}" y="${base + 18}" text-anchor="middle" class="bar-lbl">${mName(k)}</text></g>`;
   }).join("");
+  return `<div class="rc-summary">
+      <div class="rc-stat"><span class="rc-dot" style="background:var(--accent)"></span>A receber <strong>${money(totReceber)}</strong></div>
+      <div class="rc-stat"><span class="rc-dot" style="background:var(--red)"></span>Atrasado <strong style="${totAtraso ? "color:var(--red-text)" : ""}">${money(totAtraso)}</strong></div>
+      <div class="rc-stat"><span class="rc-dot" style="background:var(--green)"></span>Recebido <strong>${money(totReceb)}</strong></div>
+    </div>
+    <div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="xMinYMid meet" style="min-width:${W}px">
+      <line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="var(--border)"></line>
+      ${bars}
+    </svg></div>
+    <div class="muted" style="font-size:11px;margin-top:4px">Passe o mouse sobre as barras para ver o detalhe do mês.</div>`;
 }
 function billingForm(b = {}, refresh) {
   const done = refresh || (state.currentProgram ? renderProgramBillings : renderBillings);
@@ -975,10 +1013,11 @@ async function renderAdminCompanies() {
         ${co.logo_url ? `<img src="${esc(co.logo_url)}" alt="" style="width:34px;height:34px;border-radius:8px;object-fit:cover">` : `<div class="av ${avClass(co.name)}">${esc(ini(co.name))}</div>`}
         <div class="linfo"><div class="lname">${esc(co.name)}</div>
           <div class="lsub">${counts[co.id] || 0} / ${co.max_users} usuários</div></div>
-        <div class="lright"><button class="bicon" data-cedit="${co.id}">${ICON.edit}</button></div>
+        <div class="lright"><button class="btn btn-sm" data-cuser="${co.id}">+ Usuário</button><button class="bicon" data-cedit="${co.id}">${ICON.edit}</button></div>
       </div>`).join("") : emptyState("Nenhuma empresa cadastrada."));
   $("#add-company").onclick = () => companyForm();
   $$("[data-cedit]", c).forEach((b) => b.onclick = () => companyForm(companies.find((x) => x.id === b.dataset.cedit)));
+  $$("[data-cuser]", c).forEach((b) => b.onclick = () => userForm(b.dataset.cuser));
 }
 function companyForm(co = {}) {
   openModal({
@@ -1038,13 +1077,14 @@ const companyOpts = (sel) => state.companies.map((co) => `<option value="${co.id
 const permChecks = (perms = {}) => MODULES.map((m) => `<label class="ckline"><input type="checkbox" class="perm" data-perm="${m[0]}" ${perms[m[0]] ? "checked" : ""}> ${esc(m[1])}</label>`).join("");
 function collectPerms() { const o = {}; $$(".perm").forEach((cb) => o[cb.dataset.perm] = cb.checked); return o; }
 
-function userForm() {
+function userForm(companyId) {
+  const co = state.companies.find((x) => x.id === companyId);
   openModal({
-    title: "Novo usuário", wide: true,
+    title: co ? `Novo usuário — ${co.name}` : "Novo usuário", wide: true,
     body: `<p class="muted" style="font-size:12px;margin-bottom:12px">O usuário define a própria senha no primeiro acesso, usando este e-mail.</p>
       <div class="grid-2">${field("Nome", `<input id="f-uname" value="">`)}
         ${field("E-mail", `<input id="f-uemail" type="email" value="">`)}</div>
-      <div class="grid-2">${field("Empresa", `<select id="f-ucompany">${companyOpts(state.companyId)}</select>`)}
+      <div class="grid-2">${field("Empresa", `<select id="f-ucompany">${companyOpts(companyId || state.companyId)}</select>`)}
         ${field("Papel", `<select id="f-urole"><option value="user">Usuário</option><option value="admin">Admin da empresa</option></select>`)}</div>
       ${field("Telas liberadas", `<div>${permChecks({})}</div>`)}`,
     onSave: async () => {
