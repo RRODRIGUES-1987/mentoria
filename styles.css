@@ -213,3 +213,26 @@ button{font-family:inherit;cursor:pointer}
 .tl-dot.canc{background:var(--red);border-color:var(--red)}
 .tl-date{font-size:10px;font-weight:600;margin-top:6px}
 .tl-label{font-size:10px;color:var(--text2);text-align:center;max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── relatório consolidado ── */
+.report-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px}
+.report{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:780px}
+.rp-head{border-bottom:2px solid var(--accent);padding-bottom:12px;margin-bottom:16px}
+.rp-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)}
+.rp-name{font-size:22px;font-weight:700;margin-top:2px}
+.rp-meta{font-size:12px;color:var(--text2);margin-top:3px}
+.rp-entry{padding:12px 0;border-bottom:1px solid var(--border)}
+.rp-entry:last-child{border-bottom:none}
+.rp-entry-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;margin-bottom:6px}
+.rp-date{font-size:12px;color:var(--text2)}
+.rp-field{font-size:13px;line-height:1.5;margin-top:4px}
+.rp-flabel{font-weight:600;color:var(--text2)}
+
+@media print{
+  .bottomnav,.topbar,.dtopbar,#loading,#toast,.report-actions{display:none !important}
+  .app,.main,.content{display:block !important;height:auto !important;overflow:visible !important}
+  .content{padding:0 !important}
+  .report{border:none;padding:0;max-width:none}
+  body{background:#fff}
+  .bdg{border:1px solid #ccc}
+}
