@@ -278,3 +278,9 @@ button{font-family:inherit;cursor:pointer}
 .ar-paid{background:#e9f7f1;color:#1D9E75}
 .ar-total td{font-weight:700;background:var(--bg2);border-top:2px solid var(--accent)}
 .ar-total .ar-cli{background:var(--bg2)}
+
+/* ── bloqueio de aba duplicada ── */
+.tab-block-overlay{position:fixed;inset:0;background:rgba(251,251,251,.96);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px}
+.tab-block-card{max-width:400px;text-align:center;background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:28px;box-shadow:0 10px 40px rgba(0,0,0,.12)}
+.tab-block-title{font-size:18px;font-weight:700;margin-bottom:8px}
+.tab-block-card p{color:var(--text2);font-size:14px;margin-bottom:16px;line-height:1.5}
