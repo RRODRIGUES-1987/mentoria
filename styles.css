@@ -256,3 +256,25 @@ button{font-family:inherit;cursor:pointer}
 .chart-legend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:8px;font-size:11px;color:var(--text2)}
 .chart-legend .leg{display:flex;align-items:center;gap:5px}
 .chart-legend .leg i{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+/* ── contas a receber: matriz cliente × período ── */
+.ar-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 12px}
+.ar-nav{display:flex;align-items:center;gap:6px}
+.ar-title{font-weight:700;font-size:15px;min-width:130px;text-align:center}
+.ar-periods{display:flex;gap:3px;background:var(--bg2);border:1px solid var(--border);border-radius:999px;padding:3px}
+.ar-pbtn{border:none;background:transparent;padding:5px 13px;border-radius:999px;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;font-family:var(--font)}
+.ar-pbtn.active{background:var(--accent);color:#fff}
+.ar-grid-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);-webkit-overflow-scrolling:touch}
+.ar-grid{border-collapse:collapse;width:max-content;min-width:100%;font-size:12px}
+.ar-grid th,.ar-grid td{padding:9px 12px;text-align:center;white-space:nowrap;border-bottom:1px solid var(--border)}
+.ar-grid thead th{background:var(--accent);color:#fff;font-weight:600;position:sticky;top:0;z-index:1}
+.ar-cli{text-align:left !important;font-weight:600;position:sticky;left:0;background:var(--bg);min-width:172px;box-shadow:1px 0 0 var(--border)}
+.ar-grid thead .ar-cli{z-index:3;background:var(--accent);color:#fff}
+.ar-grid tbody .ar-cli{z-index:1}
+.ar-cell{font-weight:600}
+.ar-empty{color:var(--text3);font-weight:400}
+.ar-late{background:#fdecea;color:#c0392b}
+.ar-up{background:#eaf2fb;color:#2e6cb8}
+.ar-paid{background:#e9f7f1;color:#1D9E75}
+.ar-total td{font-weight:700;background:var(--bg2);border-top:2px solid var(--accent)}
+.ar-total .ar-cli{background:var(--bg2)}
