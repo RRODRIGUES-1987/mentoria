@@ -1,5 +1,5 @@
 /* =====================================================================
-   Mentoria App — Lógica (estilo VERUS) 
+   Mentoria App — Lógica (estilo VERUS)
    ===================================================================== */
 const cfg = window.SUPABASE_CONFIG || {};
 if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
@@ -9,7 +9,7 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
   throw new Error("Supabase não configurado");
 }
 const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.2.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -979,56 +979,87 @@ async function renderBillings() {
     bindBillings(fc, rows, renderBillings);
   } else {
     fc.innerHTML = renderReceber(rows);
+    bindReceber(fc);
   }
+}
+const ICON_CHEV_L = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>`;
+const ICON_CHEV_R = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`;
+const WD_SHORT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const MES_SHORT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+const MES_FULL = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+const pad2 = (n) => String(n).padStart(2, "0");
+const moneyShort = (v) => v >= 1000 ? "R$" + (v / 1000).toFixed(v % 1000 ? 1 : 0).replace(".", ",") + "k" : "R$" + Math.round(v);
+let finPeriod = "dia";
+const _fnow = new Date();
+let finYear = _fnow.getFullYear(), finMonth = _fnow.getMonth();
+function niceCeil(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p; const m = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10; return m * p; }
+function buildReceberColumns() {
+  const cols = [];
+  if (finPeriod === "mes") {
+    for (let m = 0; m < 12; m++) { const last = new Date(finYear, m + 1, 0).getDate(); cols.push({ label: MES_SHORT[m], start: `${finYear}-${pad2(m + 1)}-01`, end: `${finYear}-${pad2(m + 1)}-${pad2(last)}` }); }
+    return { title: String(finYear), cols };
+  }
+  const N = new Date(finYear, finMonth + 1, 0).getDate();
+  const isod = (d) => `${finYear}-${pad2(finMonth + 1)}-${pad2(d)}`;
+  if (finPeriod === "dia") {
+    for (let d = 1; d <= N; d++) cols.push({ label: `${WD_SHORT[new Date(finYear, finMonth, d).getDay()]} ${d}`, start: isod(d), end: isod(d) });
+  } else if (finPeriod === "semana") {
+    for (let s = 0; s * 7 < N; s++) { const a = 1 + s * 7, b = Math.min(a + 6, N); cols.push({ label: `${a}–${b}`, start: isod(a), end: isod(b) }); }
+  } else {
+    cols.push({ label: "1–15", start: isod(1), end: isod(Math.min(15, N))});
+    if (N > 15) cols.push({ label: `16–${N}`, start: isod(16), end: isod(N) });
+  }
+  return { title: `${MES_FULL[finMonth]} de ${finYear}`, cols };
+}
+function areaChartMonthly(values) {
+  const W = 920, H = 230, padL = 60, padR = 14, padT = 14, padB = 26, plotW = W - padL - padR, plotH = H - padT - padB;
+  const nmax = niceCeil(Math.max(...values, 1));
+  const xAt = (i) => padL + i * plotW / 11, yAt = (v) => padT + (1 - v / nmax) * plotH;
+  let grid = "", ylab = "";
+  for (let k = 0; k <= 4; k++) { const v = nmax * k / 4, y = yAt(v); grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${padL + plotW}" y2="${y.toFixed(1)}" stroke="var(--border)" ${k ? 'stroke-dasharray="2 4"' : ""}/>`; ylab += `<text x="${padL - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end" class="bar-lbl">${moneyShort(v)}</text>`; }
+  const pts = values.map((v, i) => [xAt(i), yAt(v)]);
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  const area = `M${pts[0][0].toFixed(1)} ${yAt(0).toFixed(1)} ` + pts.map((p) => "L" + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ") + ` L${pts[11][0].toFixed(1)} ${yAt(0).toFixed(1)} Z`;
+  const dots = pts.map((p, i) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3.5" fill="var(--accent)"><title>${MES_FULL[i]}: ${money(values[i])}</title></circle>`).join("");
+  const xl = MES_SHORT.map((m, i) => `<text x="${xAt(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="bar-lbl">${m}</text>`).join("");
+  return `<div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="min-width:680px">${grid}<path d="${area}" fill="var(--accent)" fill-opacity="0.08"/><path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2"/>${dots}${ylab}${xl}</svg></div>`;
 }
 function renderReceber(rows) {
   const today = todayISO();
+  const { title, cols } = buildReceberColumns();
+  const rangeStart = cols[0].start, rangeEnd = cols[cols.length - 1].end;
   const live = rows.filter((b) => b.status !== "cancelado" && b.due_date);
-  if (!live.length) return emptyState("Nada a receber.");
-  const months = {};
-  live.forEach((b) => {
-    const key = b.due_date.slice(0, 7);
-    const m = months[key] = months[key] || { recebido: 0, receber: 0, atrasado: 0, count: 0 };
-    m.count++;
-    if (b.status === "pago") m.recebido += Number(b.amount);
-    else if (b.due_date < today) m.atrasado += Number(b.amount);
-    else m.receber += Number(b.amount);
+  const inRange = live.filter((b) => b.due_date >= rangeStart && b.due_date <= rangeEnd);
+  const clientName = (b) => b.programs?.contacts?.name || b.programs?.title || b.description || "—";
+  const clients = [...new Set(inRange.map(clientName))].sort();
+  const colIdx = (due) => { for (let i = 0; i < cols.length; i++) if (due >= cols[i].start && due <= cols[i].end) return i; return -1; };
+  const cell = {}; clients.forEach((c) => cell[c] = cols.map(() => ({ sum: 0, late: false, up: false, paid: false })));
+  inRange.forEach((b) => { const i = colIdx(b.due_date); if (i < 0) return; const o = cell[clientName(b)][i]; o.sum += Number(b.amount); if (b.status === "pago") o.paid = true; else if (b.due_date < today) o.late = true; else o.up = true; });
+  const colTotal = cols.map((_, i) => clients.reduce((s, c) => s + cell[c][i].sum, 0));
+  const cls = (o) => o.late ? "ar-late" : o.up ? "ar-up" : o.paid ? "ar-paid" : "";
+  const periodBtns = [["dia", "Dia"], ["semana", "Semana"], ["quinzena", "Quinzena"], ["mes", "Mês"]].map(([v, l]) => `<button class="ar-pbtn ${finPeriod === v ? "active" : ""}" data-fper="${v}">${l}</button>`).join("");
+  const headCells = cols.map((c) => `<th>${esc(c.label)}</th>`).join("");
+  const bodyRows = clients.length ? clients.map((c) => `<tr><td class="ar-cli">${esc(c)}</td>${cell[c].map((o) => o.sum > 0 ? `<td class="ar-cell ${cls(o)}">${moneyShort(o.sum)}</td>` : `<td class="ar-cell ar-empty">–</td>`).join("")}</tr>`).join("")
+    : `<tr><td class="ar-cli">Nada no período</td>${cols.map(() => `<td class="ar-cell ar-empty">–</td>`).join("")}</tr>`;
+  const totalRow = `<tr class="ar-total"><td class="ar-cli">TOTAL</td>${colTotal.map((t) => t > 0 ? `<td>${moneyShort(t)}</td>` : `<td class="ar-empty">–</td>`).join("")}</tr>`;
+  const monthly = Array(12).fill(0);
+  live.filter((b) => b.due_date.slice(0, 4) === String(finYear)).forEach((b) => { monthly[+b.due_date.slice(5, 7) - 1] += Number(b.amount); });
+  return `<div class="ar-top">
+      <div class="ar-nav"><button class="bicon" data-fnav="prev">${ICON_CHEV_L}</button><span class="ar-title">${esc(title)}</span><button class="bicon" data-fnav="next">${ICON_CHEV_R}</button></div>
+      <div class="ar-periods">${periodBtns}</div></div>
+    <div class="ar-grid-wrap"><table class="ar-grid">
+      <thead><tr><th class="ar-cli">Cliente</th>${headCells}</tr></thead>
+      <tbody>${bodyRows}${totalRow}</tbody></table></div>
+    <div class="ev-card" style="margin-top:14px"><div class="ev-h">Recebimentos mensais — ${finYear}</div>${areaChartMonthly(monthly)}</div>`;
+}
+function bindReceber(root) {
+  $$("[data-fper]", root).forEach((b) => b.onclick = () => { finPeriod = b.dataset.fper; renderBillings(); });
+  $$("[data-fnav]", root).forEach((b) => b.onclick = () => {
+    const dir = b.dataset.fnav === "next" ? 1 : -1;
+    if (finPeriod === "mes") finYear += dir;
+    else { finMonth += dir; if (finMonth < 0) { finMonth = 11; finYear--; } else if (finMonth > 11) { finMonth = 0; finYear++; } }
+    renderBillings();
   });
-  const keys = Object.keys(months).sort();
-  const totals = keys.map((k) => months[k].recebido + months[k].receber + months[k].atrasado);
-  const max = Math.max(...totals, 1);
-  const slot = 66, barW = 38, H = 230, base = H - 40, top = 26, usable = base - top;
-  const W = Math.max(keys.length * slot, 280);
-  const mName = (k) => { const [y, m] = k.split("-"); return ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][+m - 1] + "/" + y.slice(2); };
-  const moneyK = (v) => v >= 1000 ? "R$ " + (v / 1000).toFixed(v % 1000 ? 1 : 0).replace(".", ",") + "k" : money(v);
-  const segs = (m, x) => {
-    let yb = base; const parts = [];
-    const stack = [["atrasado", "var(--red)", m.atrasado], ["receber", "var(--accent)", m.receber], ["recebido", "var(--green)", m.recebido]];
-    stack.forEach(([, color, v]) => { if (v <= 0) return; const h = (v / max) * usable; yb -= h; parts.push(`<rect x="${x}" y="${yb.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}" rx="3" fill="${color}"></rect>`); });
-    return parts.join("");
-  };
-  const totReceber = keys.reduce((s, k) => s + months[k].receber, 0);
-  const totAtraso = keys.reduce((s, k) => s + months[k].atrasado, 0);
-  const totReceb = keys.reduce((s, k) => s + months[k].recebido, 0);
-  const bars = keys.map((k, i) => {
-    const m = months[k]; const x = i * slot + (slot - barW) / 2; const tot = totals[i];
-    const tip = `${mName(k)} — ${m.count} fatura(s)\nRecebido: ${money(m.recebido)}\nA receber: ${money(m.receber)}\nAtrasado: ${money(m.atrasado)}`;
-    return `<g class="bar-g"><title>${esc(tip)}</title>
-      <rect x="${i * slot}" y="${top}" width="${slot}" height="${base - top}" fill="transparent"></rect>
-      ${segs(m, x)}
-      <text x="${x + barW / 2}" y="${base - (tot / max) * usable - 6}" text-anchor="middle" class="bar-val">${moneyK(tot)}</text>
-      <text x="${x + barW / 2}" y="${base + 18}" text-anchor="middle" class="bar-lbl">${mName(k)}</text></g>`;
-  }).join("");
-  return `<div class="rc-summary">
-      <div class="rc-stat"><span class="rc-dot" style="background:var(--accent)"></span>A receber <strong>${money(totReceber)}</strong></div>
-      <div class="rc-stat"><span class="rc-dot" style="background:var(--red)"></span>Atrasado <strong style="${totAtraso ? "color:var(--red-text)" : ""}">${money(totAtraso)}</strong></div>
-      <div class="rc-stat"><span class="rc-dot" style="background:var(--green)"></span>Recebido <strong>${money(totReceb)}</strong></div>
-    </div>
-    <div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="xMinYMid meet" style="min-width:${W}px">
-      <line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="var(--border)"></line>
-      ${bars}
-    </svg></div>
-    <div class="muted" style="font-size:11px;margin-top:4px">Passe o mouse sobre as barras para ver o detalhe do mês.</div>`;
 }
 function billingForm(b = {}, refresh) {
   const done = refresh || (state.currentProgram ? renderProgramBillings : renderBillings);
