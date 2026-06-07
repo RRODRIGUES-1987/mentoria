@@ -8,8 +8,8 @@ if (!cfg.url || cfg.url.includes("SEU-PROJETO")) {
     '<h2>⚙️ Configuração necessária</h2><p>Edite <code>config.js</code> com a URL e a chave do seu projeto Supabase.</p></div>';
   throw new Error("Supabase não configurado");
 }
-const supa = supabase.createClient(cfg.url, cfg.anonKey);
-const APP_VERSION = "2.2.0";
+const supa = supabase.createClient(cfg.url, cfg.anonKey, { auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true } });
+const APP_VERSION = "2.3.0";
 
 /* ---------- helpers ---------- */
 const $  = (s, r = document) => r.querySelector(s);
@@ -100,11 +100,51 @@ async function onLogin(user) {
   $("#tb-avatar").textContent = ini(display);
   const roleEl = $(".sburole"); if (roleEl) roleEl.textContent = prof?.companies?.name || (state.isSuperAdmin ? "Super admin" : "Mentor");
   applyPermissions();
-  await Promise.all([loadContacts(), loadPrograms()]);
+  await Promise.all([loadContacts(), loadPrograms(), loadEvalTemplates()]);
   let last = null; try { last = sessionStorage.getItem("mentoria_view"); } catch (_) {}
   const b = last && $(`.navitem[data-view="${last}"]`);
   showView(b && !b.classList.contains("hidden") ? last : firstView());
   hideLoading();
+  startIdleWatch();
+  initTabGuard();
+}
+
+/* ---------- controle de sessão ---------- */
+const IDLE_MS = 15 * 60 * 1000;
+let idleTimer = null;
+function resetIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(idleLogout, IDLE_MS); }
+async function idleLogout() {
+  try { await supa.auth.signOut(); } catch (_) {}
+  sessionStorage.setItem("mentoria_idle", "1");
+  location.reload();
+}
+function startIdleWatch() {
+  ["mousemove", "keydown", "click", "scroll", "touchstart"].forEach((e) => document.addEventListener(e, resetIdle, { passive: true }));
+  resetIdle();
+}
+let tabBC = null, tabEstablished = false, tabBlocked = false;
+function initTabGuard() {
+  if (!("BroadcastChannel" in window) || tabBC) return;
+  const myId = Math.random().toString(36).slice(2);
+  tabBC = new BroadcastChannel("mentoria_session");
+  tabBC.onmessage = (ev) => {
+    const m = ev.data || {};
+    if (m.t === "ping" && tabEstablished && m.id !== myId) tabBC.postMessage({ t: "pong", id: myId, to: m.id });
+    if (m.t === "pong" && m.to === myId && !tabEstablished && !tabBlocked) { tabBlocked = true; showTabBlock(); }
+  };
+  tabBC.postMessage({ t: "ping", id: myId });
+  setTimeout(() => { if (!tabBlocked) tabEstablished = true; }, 400);
+}
+function showTabBlock() {
+  clearTimeout(idleTimer);
+  const o = document.createElement("div");
+  o.className = "tab-block-overlay";
+  o.innerHTML = `<div class="tab-block-card">
+    <div class="tab-block-title">Sistema já aberto</div>
+    <p>Este sistema já está aberto em outra aba ou janela. Para evitar conflitos, use apenas uma por vez.</p>
+    <button class="btn btn-p" id="tab-takeover">Usar nesta aba</button></div>`;
+  document.body.appendChild(o);
+  $("#tab-takeover").onclick = () => location.reload();
 }
 function applyPermissions() {
   $$(".navitem[data-view]").forEach((b) => {
@@ -159,13 +199,13 @@ function openModal({ title, body, onSave, saveLabel = "Salvar", wide = false }) 
     <div class="mfoot"><button class="btn" data-close>Cancelar</button>
       <button class="btn btn-p" data-save>${esc(saveLabel)}</button></div></div></div>`;
   const close = () => (root.innerHTML = "");
-  $("[data-close]", root).onclick = close;
-  $(".modal-overlay", root).onclick = (e) => { if (e.target.classList.contains("modal-overlay")) close(); };
+  $("[data-close]", root).onclick = close;  $(".modal-overlay", root).onclick = (e) => { if (e.target.classList.contains("modal-overlay")) close(); };
   $("[data-save]", root).onclick = async () => {
     const b = $("[data-save]", root); b.disabled = true; b.textContent = "Salvando…";
     try { await onSave(); close(); } catch { b.disabled = false; b.textContent = saveLabel; }
   };
 }
+const closeModal = () => ($("#modal-root").innerHTML = "");
 const field = (label, inner) => `<div class="fg"><label class="fl">${esc(label)}</label>${inner}</div>`;
 const val = (id) => $("#" + id).value.trim();
 const numOrNull = (v) => v === "" ? null : Number(v);
@@ -879,9 +919,11 @@ function evaluationForm(ev = {}) {
     <button class="bicon danger crit-del" type="button">${ICON.trash}</button></div>`;
   openModal({
     title: ev.id ? "Editar avaliação" : "Nova avaliação", wide: true,
-    body: `<div class="grid-2">${field("Período / título", `<input id="f-period" value="${esc(ev.period || "")}" placeholder="Ex.: Avaliação trimestral">`)}
+    body: `${(state.evalTemplates || []).length ? field("Usar modelo", `<select id="f-tpl"><option value="">— em branco —</option>${state.evalTemplates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>`) : `<div class="muted" style="font-size:12px;margin-bottom:8px">Dica: cadastre modelos de avaliação no botão <strong>Modelos</strong> (aba Avaliações) para reaproveitar as perguntas.</div>`}
+      <div class="grid-2">${field("Período / título", `<input id="f-period" value="${esc(ev.period || "")}" placeholder="Ex.: Avaliação trimestral">`)}
         ${field("Data", `<input id="f-date" type="date" value="${esc(ev.evaluated_at || todayISO())}">`)}</div>
-      ${field("Perguntas e notas", `<div id="crit-list">${crits.map(critRow).join("")}</div><button class="btn btn-sm" type="button" id="crit-add" style="margin-top:6px">+ Pergunta</button>`)}
+      ${field("Perguntas e notas", `<div id="crit-list">${crits.map(critRow).join("")}</div>
+        <div class="row" style="gap:6px;margin-top:6px"><button class="btn btn-sm" type="button" id="crit-add">+ Pergunta</button><button class="btn btn-sm" type="button" id="crit-saretpl">Salvar como modelo</button></div>`)}
       <div class="muted" id="eval-score" style="font-size:12px;margin:6px 0 2px"></div>
       ${field("Comentários", `<textarea id="f-comments" style="min-height:90px">${esc(ev.comments || "")}</textarea>`)}`,
     onSave: async () => {
@@ -902,6 +944,62 @@ function evaluationForm(ev = {}) {
   const bind = () => { $$(".crit-del").forEach((b) => b.onclick = () => { if ($$(".crit-row").length > 1) { b.closest(".crit-row").remove(); updateScore(); } }); $$(".crit-score").forEach((s) => s.onchange = updateScore); $$(".crit-name").forEach((n) => n.oninput = updateScore); };
   bind(); updateScore();
   $("#crit-add").onclick = () => { $("#crit-list").insertAdjacentHTML("beforeend", critRow()); bind(); updateScore(); };
+  const tplSel = $("#f-tpl");
+  if (tplSel) tplSel.onchange = () => {
+    const t = (state.evalTemplates || []).find((x) => x.id === tplSel.value);
+    if (!t) return;
+    $("#crit-list").innerHTML = (t.questions || []).map((q) => critRow({ name: typeof q === "string" ? q : q.name, score: 2 })).join("") || critRow();
+    bind(); updateScore();
+  };
+  $("#crit-saretpl").onclick = async () => {
+    const qs = $$(".crit-row").map((r) => $(".crit-name", r).value.trim()).filter(Boolean);
+    if (!qs.length) { toast("Preencha as perguntas primeiro."); return; }
+    const name = prompt("Nome do modelo:", val("f-period") || "Modelo de avaliação");
+    if (!name) return;
+    const { error } = await supa.from("eval_templates").insert({ user_id: state.user.id, company_id: state.companyId || null, name, questions: qs });
+    if (error) { toast(error.message); return; }
+    await loadEvalTemplates(); toast("Modelo salvo!");
+  };
+}
+async function loadEvalTemplates() {
+  try { const { data } = await supa.from("eval_templates").select("*").order("name"); state.evalTemplates = data || []; }
+  catch (_) { state.evalTemplates = []; }
+}
+function evalTemplatesManager() {
+  const tpls = state.evalTemplates || [];
+  openModal({
+    title: "Modelos de avaliação", wide: true, saveLabel: "Fechar", onSave: async () => {},
+    body: `<p class="muted" style="font-size:12px;margin-bottom:12px">Cadastre formulários reutilizáveis. Ao criar uma avaliação, escolha um modelo para preencher as perguntas automaticamente.</p>
+      <div id="tpl-list">${tpls.length ? tpls.map((t) => `<div class="li"><div class="linfo"><div class="lname">${esc(t.name)}</div><div class="lsub">${(t.questions || []).map((q) => esc(typeof q === "string" ? q : q.name)).join(" · ") || "sem perguntas"}</div></div><div class="lright"><button class="bicon" data-tedit="${t.id}">${ICON.edit}</button><button class="bicon danger" data-tdel="${t.id}">${ICON.trash}</button></div></div>`).join("") : emptyState("Nenhum modelo ainda.")}</div>
+      <button class="btn btn-p btn-sm" type="button" id="tpl-add" style="margin-top:10px">+ Novo modelo</button>`,
+  });
+  const bindTpl = () => {
+    $$("[data-tedit]").forEach((b) => b.onclick = () => evalTemplateForm(tpls.find((x) => x.id === b.dataset.tedit)));
+    $$("[data-tdel]").forEach((b) => b.onclick = async () => { if (confirm("Excluir este modelo?")) { await supa.from("eval_templates").delete().eq("id", b.dataset.tdel); await loadEvalTemplates(); closeModal(); evalTemplatesManager(); } });
+  };
+  bindTpl();
+  $("#tpl-add").onclick = () => evalTemplateForm();
+}
+function evalTemplateForm(t = {}) {
+  const qs = t.questions && t.questions.length ? t.questions.map((q) => typeof q === "string" ? q : q.name) : [""];
+  const qRow = (q = "") => `<div class="crit-row" style="grid-template-columns:1fr 36px"><input class="tq-name" placeholder="Pergunta / competência" value="${esc(q)}"><button class="bicon danger tq-del" type="button">${ICON.trash}</button></div>`;
+  openModal({
+    title: t.id ? "Editar modelo" : "Novo modelo", wide: true, saveLabel: "Salvar modelo",
+    body: `${field("Nome do modelo", `<input id="f-tname" value="${esc(t.name || "")}" placeholder="Ex.: Avaliação de liderança">`)}
+      ${field("Perguntas", `<div id="tq-list">${qs.map(qRow).join("")}</div><button class="btn btn-sm" type="button" id="tq-add" style="margin-top:6px">+ Pergunta</button>`)}`,
+    onSave: async () => {
+      const name = val("f-tname"); if (!name) { toast("Informe o nome."); throw 0; }
+      const questions = $$(".tq-name").map((i) => i.value.trim()).filter(Boolean);
+      if (!questions.length) { toast("Adicione ao menos uma pergunta."); throw 0; }
+      const payload = { name, questions };
+      if (t.id) { const { error } = await supa.from("eval_templates").update(payload).eq("id", t.id); if (error) { toast(error.message); throw 0; } }
+      else { const { error } = await supa.from("eval_templates").insert({ ...payload, user_id: state.user.id, company_id: state.companyId || null }); if (error) { toast(error.message); throw 0; } }
+      await loadEvalTemplates(); toast("Modelo salvo."); setTimeout(() => evalTemplatesManager(), 0);
+    },
+  });
+  const bindq = () => $$(".tq-del").forEach((b) => b.onclick = () => { if ($$(".crit-row").length > 1) b.closest(".crit-row").remove(); });
+  bindq();
+  $("#tq-add").onclick = () => { $("#tq-list").insertAdjacentHTML("beforeend", qRow()); bindq(); };
 }
 
 /* ---------- faturas no programa ---------- */
@@ -920,14 +1018,15 @@ async function renderProgramBillings() {
 async function renderEvaluations() {
   const v = $("#view-evaluations");
   const { data } = await supa.from("evaluations").select("*, programs(title, contacts(name))").order("evaluated_at", { ascending: false });
-  v.innerHTML = sechdr("Performance", "Avaliações", null) +
+  v.innerHTML = sechdr("Performance", "Avaliações", "eval-templates", "Modelos") +
     ((data || []).length ? data.map((ev) => `
       <div class="li clickable" data-open="${ev.program_id}">
-        <div class="av av1">${ev.overall_score ?? "—"}</div>
+        <div class="av av1">${ev.overall_score != null ? ev.overall_score + "%" : "—"}</div>
         <div class="linfo"><div class="lname">${esc(ev.programs?.contacts?.name || "—")}</div>
           <div class="lsub">${esc(ev.programs?.title || "")}${ev.period ? " · " + esc(ev.period) : ""} · ${fmtDate(ev.evaluated_at)}</div></div>
         <div class="lright muted">abrir ›</div>
       </div>`).join("") : emptyState("Nenhuma avaliação ainda. Abra uma mentoria para adicionar."));
+  $("#eval-templates").onclick = () => evalTemplatesManager();
   $$("[data-open]", v).forEach((el) => el.onclick = () => openProgramDetail(el.dataset.open, "avaliacoes", () => showView("evaluations")));
 }
 
@@ -1217,5 +1316,8 @@ setVersion();
   showLoading();
   const { data } = await supa.auth.getSession();
   if (data.session?.user) onLogin(data.session.user);
-  else { A.app.classList.add("hidden"); A.screen.classList.remove("hidden"); hideLoading(); }
+  else {
+    A.app.classList.add("hidden"); A.screen.classList.remove("hidden"); hideLoading();
+    if (sessionStorage.getItem("mentoria_idle")) { sessionStorage.removeItem("mentoria_idle"); setTimeout(() => toast("Sessão encerrada por inatividade. Faça login novamente."), 300); }
+  }
 })();
